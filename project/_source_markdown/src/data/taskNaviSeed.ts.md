@@ -1,0 +1,399 @@
+# src\data\taskNaviSeed.ts
+
+- **元ファイル**: src\data\taskNaviSeed.ts
+- **ファイルサイズ**: 26101 bytes
+- **作成日時**: 2026-09-16 04:39:52
+
+## ソースコード
+
+    import { getDb } from './taskNaviDb';
+    import type {
+      Project, User, ProjectMember, Task, TaskAssignment,
+      TaskChatMessage, TaskNote, TaskTodo, TaskActivityEvent, TaskPurpose, ProgressStatus,
+      TaskAttachment, AttachmentRevision, AssignmentDocumentRequirement,
+      AssignmentSubmission, CloseType,
+      PersonalTask, PersonalTaskAttachment, PersonalTaskDeletionEvent,
+      TaskTemplate, TaskTemplateAttachment, TaskTemplateFavorite,
+    } from '../domain/taskNaviTypes';
+    
+    function uuid(): string {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+    
+    function now(): string { return new Date().toISOString(); }
+    function daysFromNow(days: number): string { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString(); }
+    function hoursAgo(h: number): string { const d = new Date(); d.setHours(d.getHours() - h); return d.toISOString(); }
+    function daysAgo(days: number): string { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString(); }
+    
+    export async function isSeeded(): Promise<boolean> {
+      const db = getDb();
+      const count = await db.projects.count();
+      return count > 0;
+    }
+    
+    export async function seedDatabase(): Promise<void> {
+      const db = getDb();
+      const projectId = 'proj-road';
+      const projectId2 = 'proj-bldg';
+    
+      const users: User[] = [
+        { id: 'u-yamada', name: '山田 太郎', avatar_class: 'avatar-sand', initials: 'YT' },
+        { id: 'u-tanaka', name: '田中 花子', avatar_class: 'avatar-navy', initials: 'TH' },
+        { id: 'u-sato', name: '佐藤 一郎', avatar_class: 'avatar-blue', initials: 'SI' },
+        { id: 'u-suzuki', name: '鈴木 次郎', avatar_class: 'avatar-green', initials: 'SJ' },
+        { id: 'u-takahashi', name: '高橋 三郎', avatar_class: 'avatar-navy', initials: 'TK' },
+        { id: 'u-ito', name: '伊藤 美咲', avatar_class: 'avatar-blue', initials: 'IM' },
+        { id: 'u-watanabe', name: '渡辺 健一', avatar_class: 'avatar-green', initials: 'WK' },
+      ];
+    
+      const projects: Project[] = [
+        { id: projectId, name: '○○○道路工事', color: 'blue', created_at: now() },
+        { id: projectId2, name: '△△△建築工事', color: 'orange', created_at: now() },
+      ];
+    
+      const members: ProjectMember[] = [
+        { id: uuid(), project_id: projectId, user_id: 'u-yamada', role: '作成者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-tanaka', role: '後継者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-sato', role: '対象者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-suzuki', role: '対象者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-takahashi', role: '対象者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-ito', role: '対象者' },
+        { id: uuid(), project_id: projectId, user_id: 'u-watanabe', role: '対象者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-yamada', role: '作成者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-sato', role: '対象者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-suzuki', role: '対象者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-takahashi', role: '対象者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-ito', role: '対象者' },
+        { id: uuid(), project_id: projectId2, user_id: 'u-watanabe', role: '対象者' },
+      ];
+    
+      const taskIds: string[] = [];
+      for (let i = 0; i < 9; i++) taskIds.push(uuid());
+    
+      const tasks: Task[] = [
+        // 1: 下書きタスク（draft）
+        { id: taskIds[0], project_id: projectId, purpose: '作業依頼', title: '請求書の内容確認と報告（下書き）', body: '請求書の内容を確認し、報告してください。', status: 'draft', due_at: daysFromNow(5), created_by: 'u-yamada', created_at: hoursAgo(1), updated_at: hoursAgo(1), opened_at: null, closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 2: 作業依頼（open）— 対象者3名（1名報告済み）
+        { id: taskIds[1], project_id: projectId, purpose: '作業依頼', title: '現場写真の撮影と報告', body: '現場の進捗状況を撮影し、報告してください。', status: 'open', due_at: daysFromNow(4), created_by: 'u-yamada', created_at: hoursAgo(24), updated_at: hoursAgo(20), opened_at: hoursAgo(20), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 3: 確認・判断依頼（open / 期限切れ）— 添付資料付き（確認必須資料）
+        { id: taskIds[2], project_id: projectId, purpose: '確認・判断依頼', title: '契約書の最終確認と承認', body: '契約内容を確認し、問題がなければ承認してください。', status: 'open', due_at: daysAgo(10), created_by: 'u-yamada', created_at: hoursAgo(72), updated_at: hoursAgo(48), opened_at: hoursAgo(48), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: 'u-tanaka' },
+        // 4: 周知・意見聴取（open）— チャット添付ファイル付き
+        { id: taskIds[3], project_id: projectId, purpose: '周知・意見聴取', title: '社内ポリシー改訂案へのコメント', body: '改訂案についてコメントしてください。', status: 'open', due_at: daysFromNow(7), created_by: 'u-yamada', created_at: hoursAgo(8), updated_at: hoursAgo(2), opened_at: hoursAgo(7), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 5: 回答・申込受付（open）— 対象者7名（6名完了、1名未完了）。「6/7人」表示用
+        { id: taskIds[4], project_id: projectId2, purpose: '回答・申込受付', title: '懇親会参加申込', body: '参加可否を回答してください。', status: 'open', due_at: daysFromNow(6), created_by: 'u-yamada', created_at: hoursAgo(3), updated_at: hoursAgo(2), opened_at: hoursAgo(2), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 6: 自動クローズ済みタスク（closed / auto）
+        { id: taskIds[5], project_id: projectId, purpose: '周知・意見聴取', title: '第3四半期レビューの日程調整', body: '日程について意見を聞かせてください。', status: 'closed', due_at: daysFromNow(0), created_by: 'u-yamada', created_at: hoursAgo(48), updated_at: hoursAgo(24), opened_at: hoursAgo(40), closed_at: hoursAgo(24), close_type: 'auto' as CloseType, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 7: 強制終了済みタスク（closed / forced）
+        { id: taskIds[6], project_id: projectId, purpose: '作業依頼', title: '不要になった資料作成', body: '不要となったため強制終了します。', status: 'closed', due_at: daysFromNow(0), created_by: 'u-yamada', created_at: hoursAgo(96), updated_at: hoursAgo(50), opened_at: hoursAgo(80), closed_at: hoursAgo(50), close_type: 'forced' as CloseType, close_reason: '業務要件変更により不要になりました', closed_by_user_id: 'u-yamada', archived_at: null, successor_user_id: null },
+        // 8: 差戻し済みタスク（open / accept_return）
+        { id: taskIds[7], project_id: projectId, purpose: '作業依頼', title: 'システム障害対応の報告書作成', body: '報告書を作成して提出してください。', status: 'open', due_at: daysFromNow(2), created_by: 'u-yamada', created_at: hoursAgo(72), updated_at: hoursAgo(10), opened_at: hoursAgo(48), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+        // 9: 確認・判断依頼（open）— 添付資料付き（確認必須）、対象者3名
+        { id: taskIds[8], project_id: projectId2, purpose: '確認・判断依頼', title: '設計図面の確認と承認', body: '添付の設計図面を確認し、問題がなければ承認してください。', status: 'open', due_at: daysFromNow(3), created_by: 'u-yamada', created_at: hoursAgo(6), updated_at: hoursAgo(4), opened_at: hoursAgo(5), closed_at: null, close_type: null, close_reason: null, closed_by_user_id: null, archived_at: null, successor_user_id: null },
+      ];
+    
+      const assignments: TaskAssignment[] = [];
+      const assigneeSets: Record<number, { user_id: string; progress: ProgressStatus; completed_at: string | null }[]> = {
+        1: [],
+        2: [
+          { user_id: 'u-sato', progress: 'reported', completed_at: hoursAgo(5) },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+          { user_id: 'u-takahashi', progress: 'pending', completed_at: null },
+        ],
+        3: [
+          { user_id: 'u-sato', progress: 'pending', completed_at: null },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+        ],
+        4: [
+          { user_id: 'u-sato', progress: 'pending', completed_at: null },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+        ],
+        5: [
+          { user_id: 'u-yamada', progress: 'accepted', completed_at: hoursAgo(10) },
+          { user_id: 'u-tanaka', progress: 'accepted', completed_at: hoursAgo(8) },
+          { user_id: 'u-sato', progress: 'accepted', completed_at: hoursAgo(6) },
+          { user_id: 'u-suzuki', progress: 'accepted', completed_at: hoursAgo(4) },
+          { user_id: 'u-takahashi', progress: 'accepted', completed_at: hoursAgo(3) },
+          { user_id: 'u-ito', progress: 'accepted', completed_at: hoursAgo(2) },
+          { user_id: 'u-watanabe', progress: 'pending', completed_at: null },
+        ],
+        6: [
+          { user_id: 'u-sato', progress: 'confirmed', completed_at: hoursAgo(30) },
+          { user_id: 'u-suzuki', progress: 'confirmed', completed_at: hoursAgo(28) },
+          { user_id: 'u-takahashi', progress: 'confirmed', completed_at: hoursAgo(25) },
+        ],
+        7: [
+          { user_id: 'u-sato', progress: 'pending', completed_at: null },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+        ],
+        8: [
+          { user_id: 'u-sato', progress: 'returned', completed_at: null },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+        ],
+        9: [
+          { user_id: 'u-sato', progress: 'pending', completed_at: null },
+          { user_id: 'u-suzuki', progress: 'pending', completed_at: null },
+          { user_id: 'u-takahashi', progress: 'pending', completed_at: null },
+        ],
+      };
+    
+      tasks.forEach((task, idx) => {
+        const set = assigneeSets[idx + 1];
+        if (set) {
+          set.forEach((a) => {
+            assignments.push({
+              id: uuid(), task_id: task.id, user_id: a.user_id,
+              progress_status: a.progress, assignment_status: 'active',
+              eligibility_status: 'eligible', completed_at: a.completed_at, updated_at: now(),
+            });
+          });
+        }
+      });
+    
+      // Attachments: task 3 (確認・判断依頼) with confirmation_required doc
+      const att3Id = uuid();
+      const attachments: TaskAttachment[] = [
+        {
+          id: att3Id, task_id: taskIds[2], name: '契約書_2026年版.pdf', attachment_type: 'confirmation_required',
+          attachment_status: 'active', uploaded_by: 'u-yamada', uploaded_at: hoursAgo(48),
+          current_revision_no: 1, withdrawn_at: null, withdrawal_reason: null,
+        },
+        // task 9 (確認・判断依頼) with confirmation_required doc
+        {
+          id: ((): string => { const v = uuid(); return v; })(), task_id: taskIds[8], name: '設計図面_改訂版.pdf',
+          attachment_type: 'confirmation_required', attachment_status: 'active', uploaded_by: 'u-yamada',
+          uploaded_at: hoursAgo(5), current_revision_no: 1, withdrawn_at: null, withdrawal_reason: null,
+        },
+      ];
+      const att9Id = attachments[1].id;
+    
+      const revisions: AttachmentRevision[] = [
+        { id: uuid(), attachment_id: att3Id, revision_no: 1, filename: '契約書_2026年版.pdf', revision_reason: null, uploaded_by: 'u-yamada', uploaded_at: hoursAgo(48) },
+        { id: uuid(), attachment_id: att9Id, revision_no: 1, filename: '設計図面_改訂版.pdf', revision_reason: null, uploaded_by: 'u-yamada', uploaded_at: hoursAgo(5) },
+      ];
+    
+      // Requirements: for task 3 assignees (both need to confirm the doc)
+      const reqs: AssignmentDocumentRequirement[] = [];
+      const a3s = assignments.filter((a) => a.task_id === taskIds[2]);
+      a3s.forEach((a) => {
+        reqs.push({
+          id: uuid(), assignment_id: a.id, attachment_id: att3Id, required_revision_no: 1,
+          accessed_revision_no: null, accessed_at: null, access_method: null,
+          confirmed_revision_no: null, confirmed_at: null, requirement_status: 'required',
+        });
+      });
+      // For task 9 assignees
+      const a9s = assignments.filter((a) => a.task_id === taskIds[8]);
+      a9s.forEach((a) => {
+        reqs.push({
+          id: uuid(), assignment_id: a.id, attachment_id: att9Id, required_revision_no: 1,
+          accessed_revision_no: null, accessed_at: null, access_method: null,
+          confirmed_revision_no: null, confirmed_at: null, requirement_status: 'required',
+        });
+      });
+    
+      const subs: AssignmentSubmission[] = [];
+      const a2 = assignments.find((a) => a.task_id === taskIds[1] && a.user_id === 'u-sato');
+      if (a2) {
+        subs.push({ id: uuid(), assignment_id: a2.id, submission_type: 'work_report', submission_no: 1, body: '現場写真を撮影し、報告します。', submission_status: 'submitted', submitted_by: 'u-sato', submitted_at: hoursAgo(5), reviewed_by_user_id: null, reviewed_at: null, review_comment: null });
+      }
+      const a8 = assignments.find((a) => a.task_id === taskIds[7] && a.user_id === 'u-sato');
+      if (a8) {
+        subs.push({ id: uuid(), assignment_id: a8.id, submission_type: 'work_report', submission_no: 1, body: '報告書を作成しました。', submission_status: 'returned', submitted_by: 'u-sato', submitted_at: hoursAgo(20), reviewed_by_user_id: 'u-yamada', reviewed_at: hoursAgo(10), review_comment: '不足している項目があります。補完して再提出してください。' });
+      }
+    
+      // Chats with attachment files (task 4: 周知・意見聴取)
+      const chats: TaskChatMessage[] = [
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-sato', text: '改訂案について確認します。', attachment_filename: null, created_at: hoursAgo(2) },
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-yamada', text: '資料を添付します。', attachment_filename: 'ポリシー改訂案_草案.pdf', created_at: hoursAgo(2) },
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-suzuki', text: '確認しました。第3条についてコメントがあります。', attachment_filename: 'コメント案.docx', created_at: hoursAgo(1) },
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-yamada', text: 'よろしくお願いします。', attachment_filename: null, created_at: hoursAgo(1) },
+        // task 2 also has a chat with file
+        { id: uuid(), task_id: taskIds[1], user_id: 'u-sato', text: '現場写真をアップします。', attachment_filename: '現場写真_0901.jpg', created_at: hoursAgo(5) },
+      ];
+    
+      const notes: TaskNote[] = [
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-yamada', visibility: 'shared', color: 'note-yellow', text: '第3条の記載を確認する', attachment_filename: null, created_at: hoursAgo(2), updated_at: hoursAgo(2) },
+      ];
+    
+      const todos: TaskTodo[] = [
+        { id: uuid(), task_id: taskIds[3], user_id: 'u-yamada', text: '改訂案を確認する', done: false, created_at: hoursAgo(2) },
+      ];
+    
+      const activities: TaskActivityEvent[] = [
+        { id: uuid(), task_id: taskIds[5], project_id: projectId, event_type: 'task_auto_closed', label: '全員の条件達成により自動終了しました', user_id: '', created_at: hoursAgo(24), reason: null },
+        { id: uuid(), task_id: taskIds[6], project_id: projectId, event_type: 'task_forced_closed', label: '強制終了しました', user_id: 'u-yamada', created_at: hoursAgo(50), reason: '業務要件変更により不要になりました' },
+        { id: uuid(), task_id: taskIds[7], project_id: projectId, event_type: 'work_report_returned', label: '作業報告を差戻しました', user_id: 'u-yamada', created_at: hoursAgo(10), reason: '不足している項目があります。補完して再提出してください。' },
+        { id: uuid(), task_id: taskIds[2], project_id: projectId, event_type: 'attachment_added', label: '資料「契約書_2026年版.pdf」を追加しました', user_id: 'u-yamada', created_at: hoursAgo(48), reason: null },
+        { id: uuid(), task_id: taskIds[8], project_id: projectId2, event_type: 'attachment_added', label: '資料「設計図面_改訂版.pdf」を追加しました', user_id: 'u-yamada', created_at: hoursAgo(5), reason: null },
+      ];
+    
+      const ptIds: string[] = [];
+      for (let i = 0; i < 5; i++) ptIds.push(uuid());
+      const personalTasks: PersonalTask[] = [
+        { id: ptIds[0], owner_user_id: 'u-yamada', title: '', body: '', related_project_id: null, due_at: null, status: 'draft', created_at: hoursAgo(2), updated_at: hoursAgo(2), started_at: null, archived_at: null },
+        { id: ptIds[1], owner_user_id: 'u-yamada', title: '週次レポート作成', body: '今週の作業レポートをまとめる', related_project_id: projectId, due_at: daysFromNow(3), status: 'open', created_at: hoursAgo(10), updated_at: hoursAgo(8), started_at: hoursAgo(8), archived_at: null },
+        { id: ptIds[2], owner_user_id: 'u-yamada', title: '経費精算の提出', body: '先月分の経費精算を提出する', related_project_id: null, due_at: hoursAgo(24), status: 'open', created_at: hoursAgo(72), updated_at: hoursAgo(48), started_at: hoursAgo(48), archived_at: null },
+        { id: ptIds[3], owner_user_id: 'u-yamada', title: '過去の資料整理', body: '古い資料を整理して保管場所に移動', related_project_id: projectId2, due_at: hoursAgo(100), status: 'draft', created_at: hoursAgo(200), updated_at: hoursAgo(120), started_at: null, archived_at: null },
+        { id: ptIds[4], owner_user_id: 'u-yamada', title: 'プレゼン資料作成', body: '次回会議用のプレゼン資料を作成する', related_project_id: projectId, due_at: daysFromNow(7), status: 'open', created_at: hoursAgo(20), updated_at: hoursAgo(15), started_at: hoursAgo(15), archived_at: null },
+      ];
+      const personalAttachments: PersonalTaskAttachment[] = [
+        { id: uuid(), personal_task_id: ptIds[4], display_name: '前回プレゼン資料.pptx', created_at: hoursAgo(14) },
+      ];
+    
+      const tplIds: string[] = [uuid(), uuid()];
+      const templates: TaskTemplate[] = [
+        { id: tplIds[0], name: '第○回安全大会の準備', purpose: '周知・意見聴取', title_template: '第○回安全大会の開催案内', body_template: '安全大会の開催について周知します。参加可否をお知らせください。', created_by_user_id: 'u-yamada', created_at: hoursAgo(100), updated_at: hoursAgo(50), source_task_id: null, status: 'active' },
+        { id: tplIds[1], name: '月次作業報告テンプレート', purpose: '作業依頼', title_template: '月次作業報告の提出', body_template: '今月の作業報告を提出してください。', created_by_user_id: 'u-yamada', created_at: hoursAgo(80), updated_at: hoursAgo(30), source_task_id: null, status: 'active' },
+      ];
+      const templateAttachments: TaskTemplateAttachment[] = [
+        { id: uuid(), template_id: tplIds[0], display_name: '安全大会アジェンダ.pdf', attachment_type: 'reference', sort_order: 0 },
+        { id: uuid(), template_id: tplIds[0], display_name: '安全点検表.xlsx', attachment_type: 'confirmation_required', sort_order: 1 },
+      ];
+      const templateFavorites: TaskTemplateFavorite[] = [
+        { id: uuid(), template_id: tplIds[0], user_id: 'u-yamada', created_at: hoursAgo(40) },
+      ];
+    
+      await db.transaction('rw', [db.projects, db.users, db.project_members, db.tasks, db.task_assignments, db.task_attachments, db.attachment_revisions, db.assignment_document_requirements, db.assignment_submissions, db.task_chat_messages, db.task_notes, db.task_todos, db.task_activity_events, db.personal_tasks, db.personal_task_attachments, db.task_templates, db.task_template_attachments, db.task_template_favorites], async () => {
+        await db.projects.bulkPut(projects);
+        await db.users.bulkPut(users);
+        await db.project_members.bulkPut(members);
+        await db.tasks.bulkPut(tasks);
+        await db.task_assignments.bulkPut(assignments);
+        await db.task_attachments.bulkPut(attachments);
+        await db.attachment_revisions.bulkPut(revisions);
+        await db.assignment_document_requirements.bulkPut(reqs);
+        await db.assignment_submissions.bulkPut(subs);
+        await db.task_chat_messages.bulkPut(chats);
+        await db.task_notes.bulkPut(notes);
+        await db.task_todos.bulkPut(todos);
+        await db.task_activity_events.bulkPut(activities);
+        await db.personal_tasks.bulkPut(personalTasks);
+        await db.personal_task_attachments.bulkPut(personalAttachments);
+        await db.task_templates.bulkPut(templates);
+        await db.task_template_attachments.bulkPut(templateAttachments);
+        await db.task_template_favorites.bulkPut(templateFavorites);
+      });
+      // アーカイブ一覧・AIまとめ・お気に入り確認用の共有アーカイブタスク
+      const archivedReviewTaskId = 'sample-archive-review-task';
+      const archivedPlainTaskId = 'sample-archive-plain-task';
+      const archivedReviewAt = hoursAgo(72);
+      const archivedPlainAt = hoursAgo(144);
+    
+      await db.transaction(
+        'rw',
+        [
+          db.tasks,
+          db.task_completion_reviews,
+          db.task_favorites,
+          db.task_activity_events,
+        ],
+        async () => {
+          await db.tasks.bulkPut([
+            {
+              id: archivedReviewTaskId,
+              project_id: projectId,
+              purpose: '作業依頼',
+              title: '完了報告書の振り返り',
+              body: '完了した報告書作成タスクの対応内容をアーカイブしています。',
+              status: 'archived',
+              due_at: hoursAgo(96),
+              created_by: 'u-yamada',
+              created_at: hoursAgo(168),
+              updated_at: archivedReviewAt,
+              opened_at: hoursAgo(160),
+              closed_at: hoursAgo(80),
+              close_type: 'auto',
+              close_reason: null,
+              closed_by_user_id: null,
+              archived_at: archivedReviewAt,
+              successor_user_id: null,
+            },
+            {
+              id: archivedPlainTaskId,
+              project_id: projectId2,
+              purpose: '確認・判断依頼',
+              title: '竣工図書の保管完了',
+              body: '竣工図書の保管完了後に参照するためのアーカイブです。',
+              status: 'archived',
+              due_at: hoursAgo(180),
+              created_by: 'u-yamada',
+              created_at: hoursAgo(240),
+              updated_at: archivedPlainAt,
+              opened_at: hoursAgo(232),
+              closed_at: hoursAgo(152),
+              close_type: 'auto',
+              close_reason: null,
+              closed_by_user_id: null,
+              archived_at: archivedPlainAt,
+              successor_user_id: null,
+            },
+          ]);
+    
+          await db.task_completion_reviews.bulkPut([
+            {
+              id: 'sample-archive-review-meta',
+              task_id: archivedReviewTaskId,
+              ai_analysis_output_generated_at: hoursAgo(74),
+              ai_summary: '報告書は期限内に提出され、関係者間の確認も円滑に完了しました。次回は確認観点を事前に共有すると、レビュー時間をさらに短縮できます。',
+              admin_comment: '資料構成と関係者への共有タイミングは適切でした。次回はレビュー開始時点で最終版の格納先も明記してください。',
+              updated_by_user_id: 'u-yamada',
+              created_at: archivedReviewAt,
+              updated_at: archivedReviewAt,
+            },
+          ]);
+    
+          await db.task_favorites.bulkPut([
+            {
+              id: 'sample-archive-review-favorite',
+              task_id: archivedReviewTaskId,
+              user_id: 'u-yamada',
+              created_at: archivedReviewAt,
+            },
+          ]);
+    
+          await db.task_activity_events.bulkPut([
+            {
+              id: 'sample-archive-review-activity',
+              task_id: archivedReviewTaskId,
+              project_id: projectId,
+              event_type: 'task_archived',
+              label: 'タスクをアーカイブしました',
+              user_id: 'u-yamada',
+              created_at: archivedReviewAt,
+              reason: null,
+            },
+            {
+              id: 'sample-archive-plain-activity',
+              task_id: archivedPlainTaskId,
+              project_id: projectId2,
+              event_type: 'task_archived',
+              label: 'タスクをアーカイブしました',
+              user_id: 'u-yamada',
+              created_at: archivedPlainAt,
+              reason: null,
+            },
+          ]);
+        },
+      );
+    }
+    
+    export async function resetDatabase(): Promise<void> {
+      const db = getDb();
+      const tables = [
+            db.task_completion_reviews, db.task_favorites,db.projects, db.users, db.project_members, db.tasks, db.task_assignments,
+        db.assignment_submissions, db.task_attachments, db.attachment_revisions,
+        db.assignment_document_requirements, db.task_chat_messages, db.task_notes,
+        db.task_note_favorites, db.task_todos, db.task_activity_events,
+        db.personal_tasks, db.personal_task_attachments, db.personal_task_deletion_events,
+        db.task_templates, db.task_template_attachments, db.task_template_favorites,
+            db.chat_attachment_promotions];
+      await db.transaction('rw', tables, async () => {
+        await Promise.all(tables.map((t) => t.clear()));
+      });
+      await seedDatabase();
+    }

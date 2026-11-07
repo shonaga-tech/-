@@ -1,0 +1,3383 @@
+# tasknavi-current-source-check.txt
+
+- **元ファイル**: tasknavi-current-source-check.txt
+- **ファイルサイズ**: 120260 bytes
+- **作成日時**: 2026-09-16 04:39:52
+
+## ソースコード
+
+    # TASK-NAVI Current Source Check
+    # Generated: 2026-09-15 16:03:05
+    
+    ============================================================
+    FILE: src\hooks\useTaskNavi.ts
+    ============================================================
+    import { useCallback, useEffect, useRef, useState } from 'react';
+    import { isIndexedDBAvailable } from '../data/taskNaviDb';
+    import { isSeeded, seedDatabase, resetDatabase } from '../data/taskNaviSeed';
+    import type {
+      TaskView, TaskDetailView, ProjectView, UserView, ActivityView, NoteListView,
+      TaskPurpose, TaskStatus, AttachmentType,
+      PersonalTaskView, PersonalTaskDetailView, TemplateView,
+      PageView, MyTasksFilter, TaskTypeFilter, SharedConditionFilter, PersonalConditionFilter,
+      TaskPurpose as PurposeType,
+    } from '../domain/taskNaviTypes';
+    import * as service from '../services/taskNaviService';
+    import { getProjectMembers, getAllProjectMembers, createTemplate as repoCreateTemplate, deleteTemplateAtomic } from '../data/taskNaviRepository';
+    
+    export interface TaskCreateInput {
+      purpose: TaskPurpose;
+      title: string;
+      body: string;
+      due_at: string | null;
+      assignee_user_ids: string[];
+      publish: boolean;
+      successor_user_id: string | null;
+    }
+    
+    export interface PersonalTaskCreateInput {
+      title: string;
+      body: string;
+      related_project_id: string | null;
+      due_at: string | null;
+      publish: boolean;
+    }
+    
+    export function useTaskNavi() {
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState<string | null>(null);
+      const [projects, setProjects] = useState<ProjectView[]>([]);
+      const [users, setUsers] = useState<UserView[]>([]);
+      const [currentUserId, setCurrentUserId] = useState('');
+      const [currentProjectId, setCurrentProjectId] = useState('');
+      const [allTasks, setAllTasks] = useState<TaskView[]>([]);
+      const [projectTasks, setProjectTasks] = useState<TaskView[]>([]);
+      const [activities, setActivities] = useState<ActivityView[]>([]);
+      const [projectMembers, setProjectMembers] = useState<UserView[]>([]);
+      const [detail, setDetail] = useState<TaskDetailView | null>(null);
+      const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+      const [toast, setToast] = useState('');
+      const [showResetConfirm, setShowResetConfirm] = useState(false);
+      const [noteList, setNoteList] = useState<NoteListView[]>([]);
+    
+      // Phase 3.0 state
+      const [pageView, setPageView] = useState<PageView>('my_tasks');
+      const [personalTasks, setPersonalTasks] = useState<PersonalTaskView[]>([]);
+      const [templates, setTemplates] = useState<TemplateView[]>([]);
+      // ユーザー切替中に、古いテンプレート読込結果が画面を上書きしないための連番。
+      const templateReloadRequestRef = useRef(0);
+      const [personalDetail, setPersonalDetail] = useState<PersonalTaskDetailView | null>(null);
+      const [selectedPersonalTaskId, setSelectedPersonalTaskId] = useState<string | null>(null);
+      const [availableProjectIds, setAvailableProjectIds] = useState<Set<string>>(new Set());
+    
+      // Filter state
+      const [searchQuery, setSearchQuery] = useState('');
+      const [myTasksFilter, setMyTasksFilter] = useState<MyTasksFilter>('all');
+      const [taskTypeFilter, setTaskTypeFilter] = useState<TaskTypeFilter>('all');
+      const [sharedConditionFilter, setSharedConditionFilter] = useState<SharedConditionFilter>('all');
+      const [personalConditionFilter, setPersonalConditionFilter] = useState<PersonalConditionFilter>('all');
+      const [purposeFilter, setPurposeFilter] = useState<PurposeType | 'all'>('all');
+      const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+      const [page, setPage] = useState(1);
+      const [pageSize, setPageSize] = useState(30);
+    
+      function showToast(msg: string) {
+        setToast(msg);
+        window.setTimeout(() => setToast(''), 2400);
+      }
+    
+      const reloadAllTasks = useCallback(async (userId: string) => {
+        const list = await service.loadAllTasksForUser(userId);
+        setAllTasks(list);
+      }, []);
+    
+      const reloadProjectTasks = useCallback(async (projectId: string, userId: string) => {
+        const [list, acts] = await Promise.all([
+          service.loadSharedTasksForUser(projectId, userId),
+          service.loadActivity(projectId, 10),
+        ]);
+        setProjectTasks(list);
+        setActivities(acts);
+      }, []);
+    
+      const reloadNoteList = useCallback(async (userId: string) => {
+        const list = await service.loadNoteList(userId);
+        setNoteList(list);
+      }, []);
+    
+      const reloadPersonalTasks = useCallback(async (userId: string) => {
+        const list = await service.loadPersonalTasks(userId);
+        setPersonalTasks(list);
+      }, []);
+    
+      const reloadTemplates = useCallback(async (userId: string) => {
+        const requestNo = ++templateReloadRequestRef.current;
+        const list = await service.loadTemplates(userId);
+    
+        // ユーザーA → ユーザーB → ユーザーA のような切替時に、
+        // 前の非同期読込結果で現在の一覧を上書きしない。
+        if (requestNo !== templateReloadRequestRef.current) return;
+    
+        setTemplates(list);
+      }, []);
+    
+      const reloadAvailableProjects = useCallback(async (userId: string) => {
+        const members = await getAllProjectMembers();
+        setAvailableProjectIds(new Set(members.filter((m) => m.user_id === userId).map((m) => m.project_id)));
+      }, []);
+    
+      const init = useCallback(async () => {
+        if (!isIndexedDBAvailable()) {
+          setError('このブラウザではIndexedDBが利用できません。');
+          setLoading(false);
+          return;
+        }
+        try {
+          const seeded = await isSeeded();
+          if (!seeded) await seedDatabase();
+          const [projs, allUsers] = await Promise.all([service.loadProjects(), service.loadUsers()]);
+          setProjects(projs);
+          setUsers(allUsers);
+          if (projs.length > 0) setCurrentProjectId(projs[0].id);
+          if (allUsers.length > 0) setCurrentUserId(allUsers[0].id);
+          setLoading(false);
+        } catch (e) {
+          setError(`データの読み込みに失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+          setLoading(false);
+        }
+      }, []);
+    
+      useEffect(() => { void init(); }, [init]);
+    
+      useEffect(() => {
+        if (currentUserId) {
+          void reloadAllTasks(currentUserId);
+          void reloadNoteList(currentUserId);
+          void reloadPersonalTasks(currentUserId);
+          void reloadTemplates(currentUserId);
+          void reloadAvailableProjects(currentUserId);
+        }
+      }, [currentUserId, reloadAllTasks, reloadNoteList, reloadPersonalTasks, reloadTemplates, reloadAvailableProjects]);
+    
+      useEffect(() => {
+        if (currentProjectId && currentUserId) void reloadProjectTasks(currentProjectId, currentUserId);
+      }, [currentProjectId, currentUserId, reloadProjectTasks]);
+    
+      useEffect(() => {
+        async function loadMembers() {
+          if (currentProjectId) {
+            const members = await getProjectMembers(currentProjectId);
+            setProjectMembers(members.map((m) => ({ id: m.user.id, name: m.user.name, avatar_class: m.user.avatar_class, initials: m.user.initials })));
+          }
+        }
+        void loadMembers();
+      }, [currentProjectId]);
+    
+      const openTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        setSelectedTaskId(taskId);
+        setSelectedPersonalTaskId(null);
+        setPersonalDetail(null);
+        const d = await service.loadTaskDetail(taskId, currentUserId);
+        setDetail(d);
+      }, [currentUserId]);
+    
+      const closeTask = useCallback(() => {
+        setSelectedTaskId(null);
+        setDetail(null);
+        setSelectedPersonalTaskId(null);
+        setPersonalDetail(null);
+      }, []);
+    
+      const refreshDetail = useCallback(async () => {
+        if (selectedTaskId && currentUserId) {
+          const d = await service.loadTaskDetail(selectedTaskId, currentUserId);
+          setDetail(d);
+        }
+      }, [selectedTaskId, currentUserId]);
+    
+      const openPersonalTask = useCallback(async (taskId: string) => {
+        const d = await service.loadPersonalTaskDetail(taskId);
+        setSelectedPersonalTaskId(taskId);
+        setSelectedTaskId(null);
+        setDetail(null);
+        setPersonalDetail(d);
+      }, []);
+    
+      const refreshPersonalDetail = useCallback(async () => {
+        if (selectedPersonalTaskId) {
+          const d = await service.loadPersonalTaskDetail(selectedPersonalTaskId);
+          setPersonalDetail(d);
+        }
+      }, [selectedPersonalTaskId]);
+    
+      const reloadAll = useCallback(async () => {
+        if (currentUserId) await reloadAllTasks(currentUserId);
+        if (currentProjectId && currentUserId) await reloadProjectTasks(currentProjectId, currentUserId);
+        await refreshDetail();
+        if (currentUserId) await reloadPersonalTasks(currentUserId);
+      }, [currentUserId, currentProjectId, reloadAllTasks, reloadProjectTasks, refreshDetail, reloadPersonalTasks]);
+    
+      const navigateTo = useCallback((view: PageView) => {
+        closeTask();
+        setPageView(view);
+        setPage(1);
+        setSearchQuery('');
+      }, [closeTask]);
+    
+      const createTask = useCallback(async (input: TaskCreateInput) => {
+        if (!currentProjectId || !currentUserId) return;
+        if (input.publish) {
+          const result = await service.createAndPublishTask({
+            project_id: currentProjectId,
+            purpose: input.purpose, title: input.title, body: input.body,
+            due_at: input.due_at, assignee_user_ids: input.assignee_user_ids,
+            created_by: currentUserId, successor_user_id: input.successor_user_id,
+          });
+          await reloadAllTasks(currentUserId);
+          if (currentProjectId) await reloadProjectTasks(currentProjectId, currentUserId);
+          showToast(result.published ? 'タスクを公開しました' : '下書きとして保存しました');
+        } else {
+          await service.createNewTask({
+            project_id: currentProjectId,
+            purpose: input.purpose, title: input.title, body: input.body,
+            due_at: input.due_at, assignee_user_ids: input.assignee_user_ids,
+            created_by: currentUserId, successor_user_id: input.successor_user_id,
+          });
+          await reloadAllTasks(currentUserId);
+          if (currentProjectId) await reloadProjectTasks(currentProjectId, currentUserId);
+          showToast('下書きとして保存しました');
+        }
+      }, [currentProjectId, currentUserId, reloadAllTasks, reloadProjectTasks]);
+    
+      const publishTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        await service.publishTask(taskId, currentUserId);
+        await reloadAll();
+        showToast('タスクを公開しました');
+      }, [currentUserId, reloadAll]);
+    
+      const addAttachment = useCallback(async (name: string, attachmentType: AttachmentType) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.addAttachment(selectedTaskId, currentUserId, name, attachmentType);
+        await refreshDetail();
+        showToast('資料を追加しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const reviseAtt = useCallback(async (attachmentId: string, reason: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.reviseAttachment(selectedTaskId, attachmentId, reason, currentUserId);
+        await refreshDetail();
+        showToast('資料を改訂しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const withdrawAtt = useCallback(async (attachmentId: string, reason: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.withdrawAttachment(selectedTaskId, attachmentId, reason, currentUserId);
+        await refreshDetail();
+        showToast('資料を撤回しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const accessAtt = useCallback(async (assignmentId: string, attachmentId: string, method: 'view' | 'download') => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.accessAttachment(selectedTaskId, assignmentId, attachmentId, method, currentUserId);
+        await refreshDetail();
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const confirmDoc = useCallback(async (assignmentId: string, attachmentId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.confirmDocument(selectedTaskId, assignmentId, attachmentId, currentUserId);
+        await reloadAll();
+        showToast('資料の確認を完了しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+      // 資料の閲覧・ダウンロードを確認完了として扱う。
+      // アクセス記録を残した直後に確認完了処理まで実行し、完了ボタンの活性状態を更新する。
+      const accessAndConfirmDoc = useCallback(async (
+        assignmentId: string,
+        attachmentId: string,
+        method: 'view' | 'download',
+      ) => {
+        if (!selectedTaskId || !currentUserId) return;
+    
+        await service.accessAttachment(
+          selectedTaskId,
+          assignmentId,
+          attachmentId,
+          method,
+          currentUserId,
+        );
+    
+        await service.confirmDocument(
+          selectedTaskId,
+          assignmentId,
+          attachmentId,
+          currentUserId,
+        );
+    
+        await reloadAll();
+        showToast('資料を確認しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const confirmTask = useCallback(async (assignmentId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.confirmTask(selectedTaskId, assignmentId, currentUserId);
+        await reloadAll();
+        showToast('確認を完了しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const submitResponse = useCallback(async (assignmentId: string, body: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.submitResponse(selectedTaskId, assignmentId, body, currentUserId);
+        await reloadAll();
+        showToast('回答を提出しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const submitWorkReport = useCallback(async (assignmentId: string, body: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.submitWorkReport(selectedTaskId, assignmentId, body, currentUserId);
+        await refreshDetail();
+        showToast('作業報告を提出しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const acceptWorkReport = useCallback(async (submissionId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.acceptWorkReport(selectedTaskId, submissionId, currentUserId);
+        await reloadAll();
+        showToast('作業報告を受領しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const returnWorkReport = useCallback(async (submissionId: string, reason: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.returnWorkReport(selectedTaskId, submissionId, reason, currentUserId);
+        await refreshDetail();
+        showToast('作業報告を差戻しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const exemptAssignee = useCallback(async (assignmentId: string, reason: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.exemptAssignee(selectedTaskId, assignmentId, reason, currentUserId);
+        await reloadAll();
+        showToast('対象者を免除しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const outOfScopeAssignee = useCallback(async (assignmentId: string, reason: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.outOfScopeAssignee(selectedTaskId, assignmentId, reason, currentUserId);
+        await reloadAll();
+        showToast('対象者を対象外にしました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      const forceCloseTask = useCallback(async (taskId: string, reason: string) => {
+        if (!currentUserId) return;
+        await service.forceCloseTask(taskId, reason, currentUserId);
+        await reloadAll();
+        showToast('タスクを強制終了しました');
+      }, [currentUserId, reloadAll]);
+    
+      const archiveTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        await service.archiveTask(taskId, currentUserId);
+        await reloadAll();
+        showToast('タスクをアーカイブしました');
+      }, [currentUserId, reloadAll]);
+    
+      const sendChat = useCallback(async (text: string, attachmentFilename: string | null) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.sendChat(selectedTaskId, currentUserId, text, attachmentFilename);
+        await refreshDetail();
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const addNote = useCallback(async (visibility: 'shared' | 'personal', color: string, text: string, attachmentFilename: string | null) => {
+        if (!selectedTaskId || !currentUserId) return;
+        if (visibility === 'shared') await service.addSharedNote(selectedTaskId, currentUserId, color, text, attachmentFilename);
+        else await service.addPersonalNote(selectedTaskId, currentUserId, color, text, attachmentFilename);
+        await refreshDetail();
+        await reloadNoteList(currentUserId);
+      }, [selectedTaskId, currentUserId, refreshDetail, reloadNoteList]);
+    
+      const deleteNote = useCallback(async (noteId: string) => {
+        if (!currentUserId) return;
+        await service.removeNote(noteId, currentUserId);
+        await refreshDetail();
+        await reloadNoteList(currentUserId);
+      }, [refreshDetail, reloadNoteList, currentUserId]);
+    
+      const toggleNoteFavorite = useCallback(async (noteId: string) => {
+        if (!currentUserId) return;
+        await service.toggleNoteFavorite(noteId, currentUserId);
+        await refreshDetail();
+        await reloadNoteList(currentUserId);
+      }, [currentUserId, refreshDetail, reloadNoteList]);
+    
+      const addTodo = useCallback(async (text: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+        await service.addTodo(selectedTaskId, currentUserId, text);
+        await refreshDetail();
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      const toggleTodo = useCallback(async (todoId: string) => {
+        await service.toggleTodoItem(todoId);
+        await refreshDetail();
+      }, [refreshDetail]);
+    
+      const deleteTodo = useCallback(async (todoId: string) => {
+        await service.removeTodo(todoId);
+        await refreshDetail();
+      }, [refreshDetail]);
+    
+    
+      // === Chat attachment promotion workflow ===
+    
+      // 一般メンバーによる関連資料化申請
+      const requestChatAttachmentPromotion = useCallback(async (chatMessageId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+    
+        await service.requestChatAttachmentPromotion(
+          selectedTaskId,
+          chatMessageId,
+          currentUserId,
+        );
+    
+        await refreshDetail();
+        showToast('関連資料化を申請しました');
+      }, [selectedTaskId, currentUserId, refreshDetail]);
+    
+      // タスク作成者による申請の許可
+      const approveChatAttachmentPromotion = useCallback(async (promotionId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+    
+        await service.approveChatAttachmentPromotionRequest(
+          selectedTaskId,
+          promotionId,
+          currentUserId,
+        );
+    
+        await reloadAll();
+        showToast('関連資料化を許可しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+    
+      // タスク作成者によるチャット添付の直接追加
+      const addChatAttachmentAsReference = useCallback(async (chatMessageId: string) => {
+        if (!selectedTaskId || !currentUserId) return;
+    
+        await service.addChatAttachmentAsReference(
+          selectedTaskId,
+          chatMessageId,
+          currentUserId,
+        );
+    
+        await reloadAll();
+        showToast('チャット添付を関連資料に追加しました');
+      }, [selectedTaskId, currentUserId, reloadAll]);
+      // === Personal Task operations ===
+      const createPersonalTask = useCallback(async (input: PersonalTaskCreateInput) => {
+        if (!currentUserId) return;
+    
+        // まずは下書きとして作成する。
+        const createdTask = await service.createPersonalTaskItem({
+          owner_user_id: currentUserId,
+          title: input.title,
+          body: input.body,
+          related_project_id: input.related_project_id,
+          due_at: input.due_at,
+        });
+    
+        // 「公開」の場合、既存の開始処理を通して対応中（open）へ移行する。
+        // 既存ロジックにより、件名・期限が揃っている場合だけ開始される。
+        if (input.publish) {
+          await service.startPersonalTask(createdTask.id, currentUserId);
+        }
+    
+        await reloadPersonalTasks(currentUserId);
+        showToast(input.publish ? '個人タスクを公開しました' : '下書きとして保存しました');
+      }, [currentUserId, reloadPersonalTasks]);
+    
+      const startPersonalTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        await service.startPersonalTask(taskId, currentUserId);
+        await reloadPersonalTasks(currentUserId);
+        await refreshPersonalDetail();
+        showToast('個人タスクを開始しました');
+      }, [currentUserId, reloadPersonalTasks, refreshPersonalDetail]);
+    
+      const completePersonalTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        await service.completePersonalTask(taskId, currentUserId);
+        await reloadPersonalTasks(currentUserId);
+        closeTask();
+        showToast('完了してアーカイブしました');
+      }, [currentUserId, reloadPersonalTasks, closeTask]);
+    
+      const deletePersonalTask = useCallback(async (taskId: string) => {
+        if (!currentUserId) return;
+        await service.deletePersonalTask(taskId, currentUserId);
+        await reloadPersonalTasks(currentUserId);
+        closeTask();
+        showToast('個人タスクを削除しました');
+      }, [currentUserId, reloadPersonalTasks, closeTask]);
+    
+      const updatePersonalTask = useCallback(async (taskId: string, updates: Record<string, unknown>) => {
+        if (!currentUserId) return;
+        await service.updatePersonalTaskItem(taskId, currentUserId, updates as Partial<import('../domain/taskNaviTypes').PersonalTask>);
+        await reloadPersonalTasks(currentUserId);
+        await refreshPersonalDetail();
+      }, [currentUserId, reloadPersonalTasks, refreshPersonalDetail]);
+    
+      const addPersonalAttachment = useCallback(async (taskId: string, displayName: string) => {
+        if (!currentUserId) return;
+        await service.addPersonalAttachment(taskId, currentUserId, displayName);
+        await reloadPersonalTasks(currentUserId);
+        await refreshPersonalDetail();
+        showToast('資料を追加しました');
+      }, [currentUserId, reloadPersonalTasks, refreshPersonalDetail]);
+    
+      const removePersonalAttachment = useCallback(async (attachmentId: string) => {
+        if (!currentUserId) return;
+        await service.removePersonalAttachment(attachmentId, currentUserId);
+        await reloadPersonalTasks(currentUserId);
+        await refreshPersonalDetail();
+        showToast('資料を削除しました');
+      }, [currentUserId, reloadPersonalTasks, refreshPersonalDetail]);
+    
+      // === Template operations ===
+    
+      const createTemplate = useCallback(async (data: {
+        name: string;
+        purpose: TaskPurpose;
+        title: string;
+        body: string;
+      }) => {
+        if (!currentUserId) {
+          throw new Error('検証ユーザーが選択されていません。');
+        }
+    
+        const createdTemplate = await service.createUserTemplate({
+          name: data.name.trim(),
+          purpose: data.purpose,
+          title: data.title.trim(),
+          body: data.body.trim(),
+          user_id: currentUserId,
+        });
+    
+        // DB保存後に、現在のユーザーが所有するテンプレートを再取得する。
+        const templatesForCurrentUser = await service.loadTemplates(currentUserId);
+    
+        if (!templatesForCurrentUser.some((template) => template.id === createdTemplate.id)) {
+          throw new Error(
+            'テンプレートは保存されましたが、現在のユーザーの一覧に取得できませんでした。',
+          );
+        }
+    
+        setTemplates(templatesForCurrentUser);
+        showToast('テンプレートを作成しました');
+      }, [currentUserId]);
+    
+      const deleteTemplate = useCallback(async (templateId: string) => {
+        if (!currentUserId) return;
+    
+        await service.deleteUserTemplate(templateId, currentUserId);
+        await reloadTemplates(currentUserId);
+        showToast('テンプレートを削除しました');
+      }, [currentUserId, reloadTemplates]);
+    
+      const saveTemplate = useCallback(async (taskId: string, name: string) => {
+        if (!currentUserId) return;
+        await service.saveTaskAsTemplate({ task_id: taskId, name, user_id: currentUserId });
+        await reloadTemplates(currentUserId);
+        showToast('テンプレートとして保存しました');
+      }, [currentUserId, reloadTemplates]);
+    
+      const createTaskFromTemplate = useCallback(async (templateId: string) => {
+        if (!currentProjectId || !currentUserId) return;
+        await service.createTaskFromTemplate({ template_id: templateId, project_id: currentProjectId, user_id: currentUserId });
+        await reloadAllTasks(currentUserId);
+        if (currentProjectId) await reloadProjectTasks(currentProjectId, currentUserId);
+        showToast('テンプレートからタスクを作成しました');
+      }, [currentProjectId, currentUserId, reloadAllTasks, reloadProjectTasks]);
+    
+      const toggleTemplateFavorite = useCallback(async (templateId: string) => {
+        if (!currentUserId) return;
+        await service.toggleTemplateFavorite(templateId, currentUserId);
+        await reloadTemplates(currentUserId);
+      }, [currentUserId, reloadTemplates]);
+    
+      const handleReset = useCallback(async () => {
+        setShowResetConfirm(false);
+        setLoading(true);
+        await resetDatabase();
+        closeTask();
+        const [projs, allUsers] = await Promise.all([service.loadProjects(), service.loadUsers()]);
+        setProjects(projs);
+        setUsers(allUsers);
+        if (projs.length > 0) setCurrentProjectId(projs[0].id);
+        if (allUsers.length > 0) setCurrentUserId(allUsers[0].id);
+        setLoading(false);
+        showToast('検証データを初期状態に戻しました');
+      }, [closeTask]);
+    
+      const currentUser = users.find((u) => u.id === currentUserId) ?? null;
+      const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+      const archivedTasks = allTasks.filter((t) => t.status === 'archived');
+    
+      return {
+        loading, error,
+        projects, users, currentUserId, currentUser, currentProjectId, currentProject,
+        allTasks, projectTasks, archivedTasks, activities, projectMembers,
+        detail, selectedTaskId,
+        toast, showResetConfirm, noteList,
+        setCurrentUserId, setCurrentProjectId, setShowResetConfirm,
+        openTask, closeTask, createTask, publishTask,
+        addAttachment, reviseAtt, withdrawAtt, accessAtt, confirmDoc,
+        requestChatAttachmentPromotion, approveChatAttachmentPromotion, addChatAttachmentAsReference, accessAndConfirmDoc,
+        confirmTask, submitResponse, submitWorkReport, acceptWorkReport, returnWorkReport,
+        exemptAssignee, outOfScopeAssignee, forceCloseTask, archiveTask,
+        sendChat, addNote, deleteNote, toggleNoteFavorite, addTodo, toggleTodo, deleteTodo,
+        handleReset,
+        // Phase 3.0
+        pageView, navigateTo,
+        personalTasks, personalDetail, selectedPersonalTaskId,
+        openPersonalTask, createPersonalTask, startPersonalTask, completePersonalTask,
+        deletePersonalTask, updatePersonalTask, addPersonalAttachment, removePersonalAttachment,
+        templates, saveTemplate, createTemplate, deleteTemplate, createTaskFromTemplate, toggleTemplateFavorite,
+        availableProjectIds,
+        searchQuery, setSearchQuery,
+        myTasksFilter, setMyTasksFilter,
+        taskTypeFilter, setTaskTypeFilter,
+        sharedConditionFilter, setSharedConditionFilter,
+        personalConditionFilter, setPersonalConditionFilter,
+        purposeFilter, setPurposeFilter,
+        viewMode, setViewMode,
+        page, setPage, pageSize, setPageSize,
+      };
+    }
+    
+    
+    ============================================================
+    FILE: src\services\taskNaviService.ts
+    ============================================================
+    import {
+      getChatAttachmentPromotionsByTask,
+      getChatAttachmentPromotionByChatMessage,
+      createChatAttachmentPromotion,
+      approveChatAttachmentPromotion,
+    } from '../data/taskNaviRepository';
+    import {
+      getProjects, getUsers, getTasksByProject, getAssignmentsByTask, getAllAssignments,
+      getAllTasks, getAllAssignmentsByUser,
+      getChatMessages, getNotes, getAllNotes, getTodos,
+      addChatMessage as repoAddChat, addNote as repoAddNote, updateNote as repoUpdateNote, deleteNoteAtomic,
+      addTodo as repoAddTodo, toggleTodo as repoToggleTodo, deleteTodo as repoDeleteTodo,
+      createTask as repoCreateTask, setTaskStatus, updateTask,
+      getProjectMembers, getRecentActivity, getActivityByTask, addActivityEvent,
+      getUser, getTask,
+      getNoteFavorites, addNoteFavorite, removeNoteFavorite,
+      getAttachmentsByTask, createAttachment, reviseAttachment as repoReviseAttachment, withdrawAttachment as repoWithdrawAttachment,
+      getRevisionsByAttachment, getAttachment,
+      getRequirementsByAssignment, getAllRequirementsForTask,
+      createRequirementsForAssignment, updateRequirement, getRequirement,
+      getSubmissionsByAssignment, getAllSubmissionsByTask, createSubmission, updateSubmission,
+      getAssignmentByUserAndTask, updateAssignment,
+      getAllProjectMembers,
+      getPersonalTasksByOwner, getPersonalTask, createPersonalTask, updatePersonalTask,
+      deletePersonalTaskAtomic, getPersonalTaskAttachments,
+      addPersonalTaskAttachment, deletePersonalTaskAttachment,
+      getAllTemplates, getTemplate, createTemplate, getTemplateAttachments, addTemplateAttachment,
+      deleteTemplateAtomic,
+      getTemplateFavorites, addTemplateFavorite, removeTemplateFavorite,
+      getNote,
+    } from '../data/taskNaviRepository';
+    import {
+      buildTaskView, buildChatMessageViews, buildNoteViews, buildTodoViews, buildActivityViews,
+      buildNoteListViews, isEligibleActive, validatePublish, checkAutoClose,
+      buildAttachmentViews, buildRequirementViews, buildSubmissionViews,
+      buildAssigneeDetailViews, buildHistoryViews,
+      buildPersonalTaskView, buildPersonalTaskDetailView, buildTemplateView,
+      sortSharedTasks, sortPersonalTasks, searchSharedTasks, searchPersonalTasks, paginate,
+      computeSharedSummaryCounts, computePersonalSummaryCounts, computeMyTasksSummaryCounts,
+    } from './taskNaviSelectors';
+    import { COMPLETE_BY_PURPOSE } from '../domain/taskNaviConstants';
+    import type {
+      Task, TaskView, TaskDetailView, ProjectView, UserView, ActivityView, NoteListView,
+      TaskPurpose, TaskStatus, AttachmentType, EligibilityStatus,
+      PersonalTask, PersonalTaskView, PersonalTaskDetailView, TaskTemplate,
+      TemplateView, TaskType, PersonalTaskStatus,
+      SharedSummaryCounts, PersonalSummaryCounts, MyTasksSummaryCounts,
+      TaskAssignment,
+    } from '../domain/taskNaviTypes';
+    import { getDb } from '../data/taskNaviDb';
+    
+    export async function loadProjects(): Promise<ProjectView[]> {
+      const projects = await getProjects();
+      return projects.map((p) => ({ id: p.id, name: p.name, color: p.color }));
+    }
+    
+    export async function loadUsers(): Promise<UserView[]> {
+      const users = await getUsers();
+      return users.map((u) => ({ id: u.id, name: u.name, avatar_class: u.avatar_class, initials: u.initials }));
+    }
+    
+    function isTaskRelevant(task: Task, assignments: TaskAssignment[], currentUserId: string): boolean {
+      if (task.created_by === currentUserId) return true;
+      if (task.successor_user_id === currentUserId) return true;
+      return assignments.some((a) => a.user_id === currentUserId && isEligibleActive(a));
+    }
+    
+    export async function loadAllTasksForUser(currentUserId: string): Promise<TaskView[]> {
+      const [allTasks, users, projects, myAssignments] = await Promise.all([
+        getAllTasks(), getUsers(), getProjects(), getAllAssignmentsByUser(currentUserId),
+      ]);
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const myTaskIds = new Set(myAssignments.map((a) => a.task_id));
+      const relatedTasks = allTasks.filter((t) => {
+        if (t.created_by === currentUserId) return true;
+        if (t.successor_user_id === currentUserId) return true;
+        if (!myTaskIds.has(t.id)) return false;
+        const taskAssignments = myAssignments.filter((a) => a.task_id === t.id);
+        return taskAssignments.some(isEligibleActive);
+      });
+      const taskIds = relatedTasks.map((t) => t.id);
+      const allAssignments = await getAllAssignments(taskIds);
+      return relatedTasks
+        .filter((t) => t.status !== 'archived')
+        .map((task) => {
+          const assignments = allAssignments.filter((a) => a.task_id === task.id);
+          return buildTaskView(task, assignments, userMap, projectMap, currentUserId);
+        });
+    }
+    
+    export async function loadSharedTasksForUser(projectId: string, currentUserId: string): Promise<TaskView[]> {
+      const tasks = await getTasksByProject(projectId);
+      const users = await getUsers();
+      const projects = await getProjects();
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const taskIds = tasks.map((t) => t.id);
+      const allAssignments = await getAllAssignments(taskIds);
+      return tasks
+        .filter((t) => {
+          if (t.status === 'draft') return t.created_by === currentUserId;
+          if (t.status === 'open' || t.status === 'closed') {
+            return isTaskRelevant(t, allAssignments.filter((a) => a.task_id === t.id), currentUserId);
+          }
+          return false;
+        })
+        .map((task) => {
+          const assignments = allAssignments.filter((a) => a.task_id === task.id);
+          return buildTaskView(task, assignments, userMap, projectMap, currentUserId);
+        });
+    }
+    
+    export async function loadArchivedTasksForUser(currentUserId: string): Promise<TaskView[]> {
+      const allTasks = await getAllTasks();
+      const users = await getUsers();
+      const projects = await getProjects();
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const archivedTasks = allTasks.filter((t) => t.status === 'archived');
+      const taskIds = archivedTasks.map((t) => t.id);
+      const allAssignments = await getAllAssignments(taskIds);
+      return archivedTasks
+        .filter((t) => isTaskRelevant(t, allAssignments.filter((a) => a.task_id === t.id), currentUserId))
+        .map((task) => {
+          const assignments = allAssignments.filter((a) => a.task_id === task.id);
+          return buildTaskView(task, assignments, userMap, projectMap, currentUserId);
+        });
+    }
+    
+    export async function loadTaskDetail(taskId: string, currentUserId: string): Promise<TaskDetailView | null> {
+      const task = await getTask(taskId);
+      if (!task) return null;
+    
+      const [users, projects, assignments, favorites, attachmentsRaw, allRequirements, allSubmissions, promotions, chats, notes, todos, history] = await Promise.all([
+        getUsers(), getProjects(), getAssignmentsByTask(taskId), getNoteFavorites(currentUserId),
+        getAttachmentsByTask(taskId), getAllRequirementsForTask(taskId),
+        getAllSubmissionsByTask(taskId),
+          getChatAttachmentPromotionsByTask(taskId),
+          getChatMessages(taskId),
+          getNotes(taskId),
+        getTodos(taskId, currentUserId), getActivityByTask(taskId, 50),
+      ]);
+    
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const favoriteSet = new Set(favorites.map((f) => f.note_id));
+      const taskView = buildTaskView(task, assignments, userMap, projectMap, currentUserId, allRequirements);
+    
+      const attachmentMap = new Map(attachmentsRaw.map((a) => [a.id, a]));
+      const attachmentViews = buildAttachmentViews(attachmentsRaw, userMap);
+    
+      const subsByAssignment = new Map<string, typeof allSubmissions>();
+      for (const s of allSubmissions) {
+        const arr = subsByAssignment.get(s.assignment_id) ?? [];
+        arr.push(s);
+        subsByAssignment.set(s.assignment_id, arr);
+      }
+      const reqsByAssignment = new Map<string, typeof allRequirements>();
+      for (const r of allRequirements) {
+        const arr = reqsByAssignment.get(r.assignment_id) ?? [];
+        arr.push(r);
+        reqsByAssignment.set(r.assignment_id, arr);
+      }
+    
+      const allAssigneeDetails = buildAssigneeDetailViews(
+        assignments, userMap, subsByAssignment, reqsByAssignment, attachmentMap,
+      );
+    
+      const myAssignment = allAssigneeDetails.find((a) => a.user_id === currentUserId) ?? null;
+      const myRequirements = myAssignment?.requirements ?? [];
+    
+      const { shared, personal } = buildNoteViews(notes, currentUserId, favoriteSet, userMap);
+      const publishErrors = task.status === 'draft' ? validatePublish(task, assignments, attachmentsRaw) : [];
+      const canPublish = publishErrors.length === 0;
+      const canForceClose = (task.status === 'draft' || task.status === 'open') && task.created_by === currentUserId;
+      const canArchive = task.status === 'closed' && task.created_by === currentUserId;
+    
+      const canSaveTemplate = (task.status === 'closed' || task.status === 'archived') && task.created_by === currentUserId;
+    
+      return {
+        task: taskView,
+        chats: buildChatMessageViews(chats, userMap, currentUserId),
+        chat_attachment_promotions: promotions
+          .sort((a, b) => b.requested_at.localeCompare(a.requested_at))
+          .map((promotion) => ({
+            id: promotion.id,
+            task_id: promotion.task_id,
+            chat_message_id: promotion.chat_message_id,
+            attachment_filename: promotion.attachment_filename,
+            requested_by_user_id: promotion.requested_by_user_id,
+            requested_by_name: userMap.get(promotion.requested_by_user_id)?.name ?? '不明',
+            requested_at: promotion.requested_at,
+            requested_at_label: new Date(promotion.requested_at).toLocaleString('ja-JP'),
+            status: promotion.status,
+            approved_by_user_id: promotion.approved_by_user_id,
+            approved_by_name: promotion.approved_by_user_id
+              ? userMap.get(promotion.approved_by_user_id)?.name ?? '不明'
+              : null,
+            approved_at: promotion.approved_at,
+            created_attachment_id: promotion.created_attachment_id,
+          })),
+        shared_notes: shared, personal_notes: personal,
+        todos: buildTodoViews(todos),
+        attachments: attachmentViews,
+        my_requirements: myRequirements,
+        my_assignments: allAssigneeDetails.filter((a) => a.user_id === currentUserId),
+        all_assignees: allAssigneeDetails,
+        history: buildHistoryViews(history, userMap),
+        publish_errors: publishErrors,
+        can_publish: canPublish,
+        can_force_close: canForceClose,
+        can_archive: canArchive,
+        my_assignment: myAssignment,
+        can_save_template: canSaveTemplate,
+      };
+    }
+    
+    export async function loadActivity(projectId: string, limit: number): Promise<ActivityView[]> {
+      const events = await getRecentActivity(projectId, limit);
+      const tasks = await getTasksByProject(projectId);
+      const users = await getUsers();
+      const taskMap = new Map(tasks.map((t) => [t.id, t]));
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      return buildActivityViews(events, taskMap, userMap);
+    }
+    
+    export async function loadNoteList(currentUserId: string): Promise<NoteListView[]> {
+      const [allNotes, allTasks, favorites] = await Promise.all([
+        getAllNotes(), getAllTasks(), getNoteFavorites(currentUserId),
+      ]);
+      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+      const favoriteSet = new Set(favorites.map((f) => f.note_id));
+      return buildNoteListViews(allNotes, taskMap, currentUserId, favoriteSet);
+    }
+    
+    export async function toggleNoteFavorite(noteId: string, userId: string): Promise<void> {
+      const favorites = await getNoteFavorites(userId);
+      const isFavorited = favorites.some((f) => f.note_id === noteId);
+      if (isFavorited) await removeNoteFavorite(noteId, userId);
+      else await addNoteFavorite(noteId, userId);
+    }
+    
+    // === Task creation (always creates as draft) ===
+    export async function createNewTask(data: {
+      project_id: string; purpose: TaskPurpose; title: string; body: string;
+      due_at: string | null; assignee_user_ids: string[];
+      created_by: string; successor_user_id: string | null;
+    }): Promise<Task> {
+      return repoCreateTask({
+        ...data,
+        status: 'draft',
+      });
+    }
+    
+    // === Publish (authoritative — used for both new and existing drafts) ===
+    export async function publishTask(taskId: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'draft') return;
+      const assignments = await getAssignmentsByTask(taskId);
+      const attachments = await getAttachmentsByTask(taskId);
+      const errors = validatePublish(task, assignments, attachments);
+      if (errors.length > 0) return;
+      const ts = new Date().toISOString();
+      await setTaskStatus(taskId, 'open', { opened_at: ts });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'task_published', label: 'タスクを公開しました',
+        user_id: userId,
+      });
+    }
+    
+    // === Create and publish in one operation (still goes through validation) ===
+    export async function createAndPublishTask(data: {
+      project_id: string; purpose: TaskPurpose; title: string; body: string;
+      due_at: string | null; assignee_user_ids: string[];
+      created_by: string; successor_user_id: string | null;
+    }): Promise<{ task: Task; published: boolean }> {
+      const task = await repoCreateTask({
+        ...data,
+        status: 'draft',
+      });
+      const assignments = await getAssignmentsByTask(task.id);
+      const attachments = await getAttachmentsByTask(task.id);
+      const errors = validatePublish(task, assignments, attachments);
+      if (errors.length > 0) {
+        return { task, published: false };
+      }
+      const ts = new Date().toISOString();
+      await setTaskStatus(task.id, 'open', { opened_at: ts });
+      await addActivityEvent({
+        task_id: task.id, project_id: data.project_id,
+        event_type: 'task_published', label: 'タスクを公開しました',
+        user_id: data.created_by,
+      });
+      return { task, published: true };
+    }
+    
+    // === Update draft task fields ===
+    export async function updateDraftTask(taskId: string, updates: Partial<Task>, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'draft') return;
+      if (task.created_by !== userId) return;
+      await updateTask(taskId, updates);
+    }
+    
+    // === Attachment operations ===
+    export async function addAttachment(taskId: string, userId: string, name: string, attachmentType: AttachmentType): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      const att = await createAttachment({ task_id: taskId, name, attachment_type: attachmentType, uploaded_by: userId });
+      if (attachmentType === 'confirmation_required') {
+        const assignments = await getAssignmentsByTask(taskId);
+        const eligible = assignments.filter(isEligibleActive);
+        for (const a of eligible) {
+          await createRequirementsForAssignment(a.id, att.id, 1);
+        }
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'attachment_added', label: `資料「${name}」を追加しました`,
+        user_id: userId,
+      });
+    }
+    
+    export async function reviseAttachment(taskId: string, attachmentId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      await repoReviseAttachment(attachmentId, reason, userId);
+      const att = await getAttachment(attachmentId);
+      if (att && att.attachment_type === 'confirmation_required') {
+        const assignments = await getAssignmentsByTask(taskId);
+        const eligible = assignments.filter(isEligibleActive);
+        for (const a of eligible) {
+          const req = await getRequirement(a.id, attachmentId);
+          if (req) {
+            await updateRequirement(req.id, {
+              required_revision_no: att.current_revision_no,
+              requirement_status: 'required',
+              confirmed_revision_no: null,
+              confirmed_at: null,
+            });
+          }
+        }
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'attachment_revised', label: `資料「${att?.name ?? ''}」を改訂しました`,
+        user_id: userId, reason,
+      });
+    }
+    
+    export async function withdrawAttachment(taskId: string, attachmentId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      await repoWithdrawAttachment(attachmentId, reason);
+      const reqs = await getAllRequirementsForTask(taskId);
+      const pendingReqs = reqs.filter((r) => r.attachment_id === attachmentId && r.requirement_status === 'required');
+      for (const r of pendingReqs) {
+        await updateRequirement(r.id, { requirement_status: 'not_required' });
+      }
+      const att = await getAttachment(attachmentId);
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'attachment_withdrawn', label: `資料「${att?.name ?? ''}」を撤回しました`,
+        user_id: userId, reason,
+      });
+    }
+    
+    // === Document access & confirmation ===
+    export async function accessAttachment(taskId: string, assignmentId: string, attachmentId: string, method: 'view' | 'download', userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      const req = await getRequirement(assignmentId, attachmentId);
+      if (!req || req.requirement_status !== 'required') return;
+      const att = await getAttachment(attachmentId);
+      if (!att) return;
+      const ts = new Date().toISOString();
+      await updateRequirement(req.id, {
+        accessed_revision_no: att.current_revision_no,
+        accessed_at: ts,
+        access_method: method,
+      });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: method === 'view' ? 'attachment_viewed' : 'attachment_downloaded',
+        label: `資料「${att.name}」を${method === 'view' ? '閲覧' : 'ダウンロード'}しました`,
+        user_id: userId,
+      });
+    }
+    
+    export async function confirmDocument(taskId: string, assignmentId: string, attachmentId: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      const req = await getRequirement(assignmentId, attachmentId);
+      if (!req || req.requirement_status !== 'required') return;
+      if (!req.accessed_revision_no || req.accessed_revision_no < req.required_revision_no) return;
+      const ts = new Date().toISOString();
+      await updateRequirement(req.id, {
+        requirement_status: 'confirmed',
+        confirmed_revision_no: req.accessed_revision_no,
+        confirmed_at: ts,
+      });
+      const att = await getAttachment(attachmentId);
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'document_confirmation_completed',
+        label: `資料「${att?.name ?? ''}」の確認を完了しました`,
+        user_id: userId,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    // === Assignee operations ===
+    export async function confirmTask(taskId: string, assignmentId: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'open') return;
+      const ts = new Date().toISOString();
+      await updateAssignment(assignmentId, { progress_status: 'confirmed', completed_at: ts });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'submission_submitted', label: '確認を完了しました',
+        user_id: userId,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    export async function submitResponse(taskId: string, assignmentId: string, body: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'open') return;
+      await createSubmission({ assignment_id: assignmentId, submission_type: 'response', body, submitted_by: userId });
+      const ts = new Date().toISOString();
+      await updateAssignment(assignmentId, { progress_status: 'reported', completed_at: ts });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'submission_submitted', label: '回答を提出しました',
+        user_id: userId,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    export async function submitWorkReport(taskId: string, assignmentId: string, body: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'open') return;
+      await createSubmission({ assignment_id: assignmentId, submission_type: 'work_report', body, submitted_by: userId });
+      const ts = new Date().toISOString();
+      await updateAssignment(assignmentId, { progress_status: 'reported', completed_at: ts });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'submission_submitted', label: '作業報告を提出しました',
+        user_id: userId,
+      });
+    }
+    
+    export async function acceptWorkReport(taskId: string, submissionId: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      const ts = new Date().toISOString();
+      await updateSubmission(submissionId, { submission_status: 'accepted', reviewed_by_user_id: userId, reviewed_at: ts });
+      const subs = await getAllSubmissionsByTask(taskId);
+      const sub = subs.find((s) => s.id === submissionId);
+      if (sub) {
+        await updateAssignment(sub.assignment_id, { progress_status: 'accepted', completed_at: ts });
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'work_report_accepted', label: '作業報告を受領しました',
+        user_id: userId,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    export async function returnWorkReport(taskId: string, submissionId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      const ts = new Date().toISOString();
+      await updateSubmission(submissionId, { submission_status: 'returned', reviewed_by_user_id: userId, reviewed_at: ts, review_comment: reason });
+      const subs = await getAllSubmissionsByTask(taskId);
+      const sub = subs.find((s) => s.id === submissionId);
+      if (sub) {
+        await updateAssignment(sub.assignment_id, { progress_status: 'returned', completed_at: null });
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'work_report_returned', label: '作業報告を差戻しました',
+        user_id: userId, reason,
+      });
+    }
+    
+    // === Exempt / out of scope ===
+    export async function exemptAssignee(taskId: string, assignmentId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      await updateAssignment(assignmentId, { eligibility_status: 'exempted' });
+      const reqs = await getRequirementsByAssignment(assignmentId);
+      for (const r of reqs) {
+        if (r.requirement_status === 'required') {
+          await updateRequirement(r.id, { requirement_status: 'not_required' });
+        }
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'assignment_exempted', label: '対象者を免除しました',
+        user_id: userId, reason,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    export async function outOfScopeAssignee(taskId: string, assignmentId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      await updateAssignment(assignmentId, { eligibility_status: 'out_of_scope' });
+      const reqs = await getRequirementsByAssignment(assignmentId);
+      for (const r of reqs) {
+        if (r.requirement_status === 'required') {
+          await updateRequirement(r.id, { requirement_status: 'not_required' });
+        }
+      }
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'assignment_out_of_scope', label: '対象者を対象外にしました',
+        user_id: userId, reason,
+      });
+      await checkAndAutoClose(taskId);
+    }
+    
+    // === Force close ===
+    export async function forceCloseTask(taskId: string, reason: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task) return;
+      if (task.status !== 'draft' && task.status !== 'open') return;
+      const ts = new Date().toISOString();
+      await setTaskStatus(taskId, 'closed', {
+        close_type: 'forced', close_reason: reason,
+        closed_by_user_id: userId, closed_at: ts,
+      });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'task_forced_closed', label: '強制終了しました',
+        user_id: userId, reason,
+      });
+    }
+    
+    // === Archive ===
+    export async function archiveTask(taskId: string, userId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'closed') return;
+      const ts = new Date().toISOString();
+      await setTaskStatus(taskId, 'archived', { archived_at: ts });
+      await addActivityEvent({
+        task_id: taskId, project_id: task.project_id,
+        event_type: 'task_archived', label: 'アーカイブしました',
+        user_id: userId,
+      });
+    }
+    
+    // === Auto-close helper ===
+    async function checkAndAutoClose(taskId: string): Promise<void> {
+      const task = await getTask(taskId);
+      if (!task || task.status !== 'open') return;
+      const assignments = await getAssignmentsByTask(taskId);
+      const requirements = await getAllRequirementsForTask(taskId);
+      if (checkAutoClose(task, assignments, requirements)) {
+        const ts = new Date().toISOString();
+        await setTaskStatus(taskId, 'closed', {
+          close_type: 'auto', closed_at: ts, close_reason: null, closed_by_user_id: null,
+        });
+        await addActivityEvent({
+          task_id: taskId, project_id: task.project_id,
+          event_type: 'task_auto_closed', label: '全員の条件達成により通常終了しました',
+          user_id: '',
+        });
+      }
+    }
+    
+    // === Chat / Notes / Todos ===
+    export async function sendChat(taskId: string, userId: string, text: string, attachmentFilename: string | null): Promise<void> {
+      await repoAddChat(taskId, userId, text, attachmentFilename);
+    }
+    
+    export async function addSharedNote(taskId: string, userId: string, color: string, text: string, attachmentFilename: string | null): Promise<void> {
+      await repoAddNote(taskId, userId, 'shared', color, text, attachmentFilename);
+    }
+    
+    export async function addPersonalNote(taskId: string, userId: string, color: string, text: string, attachmentFilename: string | null): Promise<void> {
+      await repoAddNote(taskId, userId, 'personal', color, text, attachmentFilename);
+    }
+    
+    export async function updateNote(noteId: string, userId: string, updates: { text?: string; color?: string; attachment_filename?: string | null }): Promise<void> {
+      const note = await getNote(noteId);
+      if (!note) return;
+      if (note.user_id !== userId) return;
+      await repoUpdateNote(noteId, updates);
+    }
+    
+    export async function removeNote(noteId: string, userId: string): Promise<void> {
+      const note = await getNote(noteId);
+      if (!note) return;
+      if (note.user_id !== userId) return;
+      await deleteNoteAtomic(noteId);
+    }
+    
+    export async function addTodo(taskId: string, userId: string, text: string): Promise<void> {
+      await repoAddTodo(taskId, userId, text);
+    }
+    
+    export async function toggleTodoItem(todoId: string): Promise<void> {
+      await repoToggleTodo(todoId);
+    }
+    
+    export async function removeTodo(todoId: string): Promise<void> {
+      await repoDeleteTodo(todoId);
+    }
+    
+    export async function getProjectMemberUsers(projectId: string): Promise<UserView[]> {
+      const members = await getProjectMembers(projectId);
+      return members.map((m) => ({ id: m.user.id, name: m.user.name, avatar_class: m.user.avatar_class, initials: m.user.initials }));
+    }
+    
+    export { getUser };
+    export { getAllProjectMembers } from '../data/taskNaviRepository';
+    
+    // === Personal Tasks ===
+    export async function loadPersonalTasks(userId: string): Promise<PersonalTaskView[]> {
+      const [tasks, projects, members] = await Promise.all([
+        getPersonalTasksByOwner(userId), getProjects(), getAllProjectMembers(),
+      ]);
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const memberProjectIds = new Set(members.filter((m) => m.user_id === userId).map((m) => m.project_id));
+      const allAttachments = await Promise.all(tasks.map((t) => getPersonalTaskAttachments(t.id)));
+      const attMap = new Map(allAttachments.map((a, i) => [tasks[i].id, a]));
+      return tasks.map((t) => buildPersonalTaskView(t, attMap.get(t.id) ?? [], projectMap, memberProjectIds));
+    }
+    
+    export async function loadPersonalTaskDetail(taskId: string): Promise<PersonalTaskDetailView | null> {
+      const task = await getPersonalTask(taskId);
+      if (!task) return null;
+      const [attachments, projects, members] = await Promise.all([
+        getPersonalTaskAttachments(taskId), getProjects(), getAllProjectMembers(),
+      ]);
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+      const memberProjectIds = new Set(members.filter((m) => m.user_id === task.owner_user_id).map((m) => m.project_id));
+      return buildPersonalTaskDetailView(task, attachments, projectMap, memberProjectIds);
+    }
+    
+    export async function createPersonalTaskItem(data: {
+      owner_user_id: string;
+      title: string;
+      body: string;
+      related_project_id: string | null;
+      due_at: string | null;
+    }): Promise<PersonalTask> {
+      return createPersonalTask({ ...data, status: 'draft' });
+    }
+    
+    export async function startPersonalTask(taskId: string, userId: string): Promise<void> {
+      const task = await getPersonalTask(taskId);
+      if (!task || task.status !== 'draft') return;
+      if (task.owner_user_id !== userId) return;
+      if (!task.title.trim() || !task.due_at) return;
+      const ts = new Date().toISOString();
+      await updatePersonalTask(taskId, { status: 'open', started_at: ts });
+    }
+    
+    export async function completePersonalTask(taskId: string, userId: string): Promise<void> {
+      const task = await getPersonalTask(taskId);
+      if (!task || task.status !== 'open') return;
+      if (task.owner_user_id !== userId) return;
+      const ts = new Date().toISOString();
+      await updatePersonalTask(taskId, { status: 'archived', archived_at: ts });
+    }
+    
+    export async function deletePersonalTask(taskId: string, userId: string): Promise<void> {
+      const task = await getPersonalTask(taskId);
+      if (!task) return;
+      if (task.owner_user_id !== userId) return;
+      if (task.status !== 'draft' && task.status !== 'open') return;
+      const wasOverdue = task.status === 'open' && task.due_at !== null && new Date(task.due_at) < new Date();
+      const hadRelatedProject = task.related_project_id !== null;
+      await deletePersonalTaskAtomic(taskId, {
+        owner_user_id: task.owner_user_id,
+        was_overdue: wasOverdue,
+        had_related_project: hadRelatedProject,
+      });
+    }
+    
+    export async function addPersonalAttachment(taskId: string, userId: string, displayName: string): Promise<void> {
+      const task = await getPersonalTask(taskId);
+      if (!task) return;
+      if (task.owner_user_id !== userId) return;
+      if (task.status !== 'draft' && task.status !== 'open') return;
+      await addPersonalTaskAttachment(taskId, displayName);
+    }
+    
+    export async function removePersonalAttachment(attachmentId: string, userId: string): Promise<void> {
+      const db = getDb();
+      const att = await db.personal_task_attachments.get(attachmentId);
+      if (!att) return;
+      const task = await getPersonalTask(att.personal_task_id);
+      if (!task || task.owner_user_id !== userId) return;
+      if (task.status !== 'draft' && task.status !== 'open') return;
+      await deletePersonalTaskAttachment(attachmentId);
+    }
+    
+    export async function updatePersonalTaskItem(taskId: string, userId: string, updates: Partial<PersonalTask>): Promise<void> {
+      const task = await getPersonalTask(taskId);
+      if (!task) return;
+      if (task.owner_user_id !== userId) return;
+      if (task.status === 'archived') return;
+      if (task.status === 'open' && 'due_at' in updates) {
+        delete updates.due_at;
+      }
+      await updatePersonalTask(taskId, updates);
+    }
+    
+    // === Templates ===
+    export async function loadTemplates(userId: string): Promise<TemplateView[]> {
+      const [allTemplates, users, favorites] = await Promise.all([
+        getAllTemplates(),
+        getUsers(),
+        getTemplateFavorites(userId),
+      ]);
+    
+      // テンプレートは個人保有とし、作成者本人のものだけを返す。
+      const templates = allTemplates.filter(
+        (template) => template.created_by_user_id === userId,
+      );
+    
+      const userMap = new Map(users.map((user) => [user.id, user]));
+      const favoriteIds = new Set(
+        favorites.map((favorite) => favorite.template_id),
+      );
+    
+      const allAttachments = await Promise.all(
+        templates.map((template) => getTemplateAttachments(template.id)),
+      );
+    
+      const attachmentMap = new Map(
+        allAttachments.map((attachments, index) => [
+          templates[index].id,
+          attachments,
+        ]),
+      );
+    
+      return templates.map((template) =>
+        buildTemplateView(
+          template,
+          attachmentMap.get(template.id) ?? [],
+          userMap,
+          favoriteIds,
+        ),
+      );
+    }
+    
+    export async function createUserTemplate(data: {
+      name: string;
+      purpose: TaskPurpose;
+      title: string;
+      body: string;
+      user_id: string;
+    }): Promise<TaskTemplate> {
+      const template = await createTemplate({
+        name: data.name.trim(),
+        purpose: data.purpose,
+        title_template: data.title.trim(),
+        body_template: data.body.trim(),
+        created_by_user_id: data.user_id,
+        source_task_id: null,
+      });
+    
+      return template;
+    }
+    
+    export async function deleteUserTemplate(
+      templateId: string,
+      userId: string,
+    ): Promise<void> {
+      const template = await getTemplate(templateId);
+    
+      // 作成者本人以外の削除は許可しない。
+      if (!template || template.created_by_user_id !== userId) return;
+    
+      await deleteTemplateAtomic(templateId, userId);
+    }
+    export async function saveTaskAsTemplate(data: {
+      task_id: string;
+      name: string;
+      user_id: string;
+    }): Promise<TaskTemplate> {
+      const task = await getTask(data.task_id);
+      if (!task || (task.status !== 'closed' && task.status !== 'archived')) throw new Error('Template can only be saved from closed or archived tasks');
+      if (task.created_by !== data.user_id) throw new Error('Only the task creator can save a template');
+      const attachments = await getAttachmentsByTask(data.task_id);
+      const template = await createTemplate({
+        name: data.name,
+        purpose: task.purpose,
+        title_template: task.title,
+        body_template: task.body,
+        created_by_user_id: data.user_id,
+        source_task_id: data.task_id,
+      });
+      for (let i = 0; i < attachments.length; i++) {
+        const att = attachments[i];
+        await addTemplateAttachment({
+          template_id: template.id,
+          display_name: att.name,
+          attachment_type: att.attachment_type,
+          sort_order: i,
+        });
+      }
+      return template;
+    }
+    
+    export async function createTaskFromTemplate(data: {
+      template_id: string;
+      project_id: string;
+      user_id: string;
+    }): Promise<Task> {
+      const template = await getTemplate(data.template_id);
+      if (!template) throw new Error('Template not found');
+      const attachments = await getTemplateAttachments(data.template_id);
+      const task = await repoCreateTask({
+        project_id: data.project_id,
+        purpose: template.purpose,
+        title: template.title_template,
+        body: template.body_template,
+        due_at: null,
+        created_by: data.user_id,
+        status: 'draft',
+        assignee_user_ids: [],
+        successor_user_id: null,
+      });
+      for (const att of attachments) {
+        const created = await createAttachment({
+          task_id: task.id,
+          name: att.display_name,
+          attachment_type: att.attachment_type,
+          uploaded_by: data.user_id,
+        });
+        if (att.attachment_type === 'confirmation_required') {
+          const assignments = await getAssignmentsByTask(task.id);
+          const eligible = assignments.filter(isEligibleActive);
+          for (const a of eligible) {
+            await createRequirementsForAssignment(a.id, created.id, 1);
+          }
+        }
+      }
+      return task;
+    }
+    
+    export async function toggleTemplateFavorite(templateId: string, userId: string): Promise<void> {
+      const favorites = await getTemplateFavorites(userId);
+      const isFav = favorites.some((f) => f.template_id === templateId);
+      if (isFav) await removeTemplateFavorite(templateId, userId);
+      else await addTemplateFavorite(templateId, userId);
+    }
+    
+    // === Summary counts ===
+    export { computeSharedSummaryCounts, computePersonalSummaryCounts, computeMyTasksSummaryCounts };
+    
+    // === Sorting, search, pagination re-exports ===
+    export { sortSharedTasks, sortPersonalTasks, searchSharedTasks, searchPersonalTasks, paginate };
+    
+    
+    // ==========================================================
+    // Chat attachment promotion workflow
+    // ==========================================================
+    
+    // 一般メンバーがチャット添付を関連資料にするよう申請する。
+    export async function requestChatAttachmentPromotion(
+      taskId: string,
+      chatMessageId: string,
+      userId: string,
+    ): Promise<void> {
+      const task = await getTask(taskId);
+    
+      if (!task || task.status !== 'open') {
+        throw new Error('公開中の共有タスクでのみ申請できます。');
+      }
+    
+      if (task.created_by === userId) {
+        throw new Error('タスク作成者は申請せず、直接関連資料へ追加してください。');
+      }
+    
+      const messages = await getChatMessages(taskId);
+      const message = messages.find(
+        (item) => item.id === chatMessageId && !!item.attachment_filename,
+      );
+    
+      if (!message?.attachment_filename) {
+        throw new Error('対象のチャット添付ファイルが見つかりません。');
+      }
+    
+      const existingPromotion = await getChatAttachmentPromotionByChatMessage(
+        taskId,
+        chatMessageId,
+      );
+    
+      if (existingPromotion?.status === 'approved') {
+        throw new Error('このファイルはすでに関連資料として登録されています。');
+      }
+    
+      if (existingPromotion?.status === 'pending') {
+        throw new Error('このファイルはすでに関連資料化を申請済みです。');
+      }
+    
+      await createChatAttachmentPromotion({
+        task_id: taskId,
+        chat_message_id: chatMessageId,
+        attachment_filename: message.attachment_filename,
+        requested_by_user_id: userId,
+      });
+    
+      await addActivityEvent({
+        task_id: taskId,
+        project_id: task.project_id,
+        event_type: 'chat_attachment_promotion_requested',
+        label: `チャット添付「${message.attachment_filename}」の関連資料化を申請しました`,
+        user_id: userId,
+      });
+    }
+    
+    // タスク作成者がチャット添付を直接、関連資料として登録する。
+    export async function addChatAttachmentAsReference(
+      taskId: string,
+      chatMessageId: string,
+      userId: string,
+    ): Promise<void> {
+      const task = await getTask(taskId);
+    
+      if (!task || task.created_by !== userId) {
+        throw new Error('関連資料への直接追加はタスク作成者のみ実行できます。');
+      }
+    
+      if (task.status !== 'draft' && task.status !== 'open') {
+        throw new Error('この状態のタスクには関連資料を追加できません。');
+      }
+    
+      const messages = await getChatMessages(taskId);
+      const message = messages.find(
+        (item) => item.id === chatMessageId && !!item.attachment_filename,
+      );
+    
+      if (!message?.attachment_filename) {
+        throw new Error('対象のチャット添付ファイルが見つかりません。');
+      }
+    
+      const attachments = await getAttachmentsByTask(taskId);
+      const existingAttachment = attachments.find(
+        (item) =>
+          item.name === message.attachment_filename &&
+          item.attachment_status === 'active',
+      );
+    
+      if (existingAttachment) {
+        throw new Error('このファイルはすでに関連資料として登録されています。');
+      }
+    
+      const attachment = await createAttachment({
+        task_id: taskId,
+        name: message.attachment_filename,
+        attachment_type: 'reference',
+        uploaded_by: userId,
+      });
+    
+      const promotion = await getChatAttachmentPromotionByChatMessage(
+        taskId,
+        chatMessageId,
+      );
+    
+      // 一般メンバーが既に申請済みの場合、直接追加も許可済みとして記録する。
+      if (promotion?.status === 'pending') {
+        await approveChatAttachmentPromotion(
+          promotion.id,
+          userId,
+          attachment.id,
+        );
+      }
+    
+      await addActivityEvent({
+        task_id: taskId,
+        project_id: task.project_id,
+        event_type: 'chat_attachment_promoted',
+        label: `チャット添付「${message.attachment_filename}」を関連資料に追加しました`,
+        user_id: userId,
+      });
+    }
+    
+    // タスク作成者が一般メンバーの申請を許可し、正式な関連資料として登録する。
+    export async function approveChatAttachmentPromotionRequest(
+      taskId: string,
+      promotionId: string,
+      userId: string,
+    ): Promise<void> {
+      const task = await getTask(taskId);
+    
+      if (!task || task.created_by !== userId) {
+        throw new Error('関連資料化申請の許可はタスク作成者のみ実行できます。');
+      }
+    
+      const promotions = await getChatAttachmentPromotionsByTask(taskId);
+      const promotion = promotions.find((item) => item.id === promotionId);
+    
+      if (!promotion || promotion.status !== 'pending') {
+        throw new Error('処理対象の関連資料化申請が見つかりません。');
+      }
+    
+      const messages = await getChatMessages(taskId);
+      const message = messages.find(
+        (item) =>
+          item.id === promotion.chat_message_id &&
+          item.attachment_filename === promotion.attachment_filename,
+      );
+    
+      if (!message?.attachment_filename) {
+        throw new Error('申請対象のチャット添付ファイルが見つかりません。');
+      }
+    
+      const attachments = await getAttachmentsByTask(taskId);
+      const existingAttachment = attachments.find(
+        (item) =>
+          item.name === message.attachment_filename &&
+          item.attachment_status === 'active',
+      );
+    
+      let attachmentId: string | null = existingAttachment?.id ?? null;
+    
+      if (!existingAttachment) {
+        const attachment = await createAttachment({
+          task_id: taskId,
+          name: message.attachment_filename,
+          attachment_type: 'reference',
+          uploaded_by: userId,
+        });
+    
+        attachmentId = attachment.id;
+      }
+    
+      await approveChatAttachmentPromotion(
+        promotion.id,
+        userId,
+        attachmentId,
+      );
+    
+      await addActivityEvent({
+        task_id: taskId,
+        project_id: task.project_id,
+        event_type: 'chat_attachment_promotion_approved',
+        label: `チャット添付「${message.attachment_filename}」の関連資料化を許可しました`,
+        user_id: userId,
+      });
+    }
+    
+    ============================================================
+    FILE: src\data\taskNaviDb.ts
+    ============================================================
+    import Dexie, { type Table } from 'dexie';
+    import type {
+      Project, User, ProjectMember, Task, TaskAssignment,
+      AssignmentSubmission, TaskAttachment, AttachmentRevision,
+      AssignmentDocumentRequirement, TaskChatMessage, TaskNote, TaskNoteFavorite,
+      TaskTodo, TaskActivityEvent,
+      PersonalTask, PersonalTaskAttachment, PersonalTaskDeletionEvent,
+      TaskTemplate, TaskTemplateAttachment, TaskTemplateFavorite,
+      ChatAttachmentPromotion,
+    } from '../domain/taskNaviTypes';
+    import { DB_NAME, DB_VERSION } from '../domain/taskNaviConstants';
+    
+    import type { TaskCompletionReview, TaskFavorite } from '../domain/taskNaviTypes';
+    export class TaskNaviDB extends Dexie {
+      projects!: Table<Project, string>;
+      users!: Table<User, string>;
+      project_members!: Table<ProjectMember, string>;
+      tasks!: Table<Task, string>;
+      task_assignments!: Table<TaskAssignment, string>;
+      assignment_submissions!: Table<AssignmentSubmission, string>;
+      task_attachments!: Table<TaskAttachment, string>;
+      attachment_revisions!: Table<AttachmentRevision, string>;
+      assignment_document_requirements!: Table<AssignmentDocumentRequirement, string>;
+      task_chat_messages!: Table<TaskChatMessage, string>;
+      task_notes!: Table<TaskNote, string>;
+      task_note_favorites!: Table<TaskNoteFavorite, string>;
+      task_todos!: Table<TaskTodo, string>;
+      task_activity_events!: Table<TaskActivityEvent, string>;
+      personal_tasks!: Table<PersonalTask, string>;
+      personal_task_attachments!: Table<PersonalTaskAttachment, string>;
+      personal_task_deletion_events!: Table<PersonalTaskDeletionEvent, string>;
+      task_templates!: Table<TaskTemplate, string>;
+      task_template_attachments!: Table<TaskTemplateAttachment, string>;
+      task_template_favorites!: Table<TaskTemplateFavorite, string>;
+      chat_attachment_promotions!: Table<ChatAttachmentPromotion, string>;
+    
+        task_completion_reviews!: Table<TaskCompletionReview, string>;
+      task_favorites!: Table<TaskFavorite, string>;
+    constructor() {
+        super(DB_NAME);
+        this.version(1).stores({
+          projects: 'id, name',
+          users: 'id, name',
+          project_members: 'id, project_id, user_id',
+          tasks: 'id, project_id, status, created_by, updated_at',
+          task_assignments: 'id, task_id, user_id, progress_status',
+          assignment_submissions: 'id, assignment_id',
+          task_attachments: 'id, task_id',
+          attachment_revisions: 'id, attachment_id',
+          assignment_document_requirements: 'id, assignment_id, attachment_id',
+          task_chat_messages: 'id, task_id, user_id, created_at',
+          task_notes: 'id, task_id, user_id, visibility, created_at',
+          task_todos: 'id, task_id, user_id, done',
+          task_activity_events: 'id, task_id, project_id, created_at',
+        });
+        this.version(2).stores({
+          task_note_favorites: 'id, note_id, user_id, &[note_id+user_id]',
+        });
+        this.version(3).stores({
+          tasks: 'id, project_id, status, created_by, successor_user_id, updated_at',
+          task_attachments: 'id, task_id, attachment_status',
+          attachment_revisions: 'id, attachment_id, revision_no',
+          assignment_submissions: 'id, assignment_id, submission_status, submitted_at',
+          assignment_document_requirements: 'id, assignment_id, attachment_id, requirement_status',
+          task_activity_events: 'id, task_id, project_id, event_type, created_at',
+        });
+        this.version(DB_VERSION).stores({
+          personal_tasks: 'id, owner_user_id, status, due_at, updated_at',
+          personal_task_attachments: 'id, personal_task_id',
+          personal_task_deletion_events: 'id, owner_user_id, deleted_at',
+          task_templates: 'id, name, created_by_user_id, status, updated_at',
+          task_template_attachments: 'id, template_id, sort_order',
+          task_template_favorites: 'id, template_id, user_id, &[template_id+user_id]',
+          task_notes: 'id, task_id, user_id, visibility, created_at, updated_at',
+        }).upgrade(async (tx) => {
+          const notes = await tx.table('task_notes').toArray();
+          for (const n of notes) {
+            if (!n.updated_at) {
+              await tx.table('task_notes').put({ ...n, updated_at: n.created_at });
+            }
+          }
+        });
+      
+          // チャット添付ファイルの関連資料化申請を保存するテーブル。
+          // 同じタスク・同じチャットメッセージへの重複申請を複合一意キーで防止する。
+          this.version(DB_VERSION + 1).stores({
+            chat_attachment_promotions: 'id, task_id, chat_message_id, status, requested_by_user_id, &[task_id+chat_message_id]',
+          });
+        // 完了後レビュー、AI分析用出力の実行状態、アーカイブお気に入り
+        this.version(DB_VERSION + 2).stores({
+          task_completion_reviews: 'id, task_id, updated_at',
+          task_favorites: 'id, task_id, user_id, &[task_id+user_id]',
+        });}
+    }
+    
+    let dbInstance: TaskNaviDB | null = null;
+    
+    export function getDb(): TaskNaviDB {
+      if (!dbInstance) {
+        dbInstance = new TaskNaviDB();
+      }
+      return dbInstance;
+    }
+    
+    export function isIndexedDBAvailable(): boolean {
+      try {
+        return typeof indexedDB !== 'undefined';
+      } catch {
+        return false;
+      }
+    }
+    
+    
+    ============================================================
+    FILE: src\data\taskNaviRepository.ts
+    ============================================================
+    import { getDb } from './taskNaviDb';
+    
+    import type { TaskCompletionReview, TaskFavorite } from '../domain/taskNaviTypes';
+    import type { ChatAttachmentPromotion } from '../domain/taskNaviTypes';
+    import type {
+      Project, User, Task, TaskAssignment, TaskNote, TaskNoteFavorite,
+      TaskPurpose, TaskStatus, TaskAttachment, AttachmentRevision,
+      AssignmentDocumentRequirement, AssignmentSubmission, TaskActivityEvent,
+      AttachmentType, CloseType, ProgressStatus, EligibilityStatus,
+      SubmissionType, SubmissionStatus, AccessMethod, RequirementStatus,
+      PersonalTask, PersonalTaskAttachment, PersonalTaskDeletionEvent,
+      TaskTemplate, TaskTemplateAttachment, TaskTemplateFavorite,
+    } from '../domain/taskNaviTypes';
+    
+    function uuid(): string {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+    
+    function now(): string {
+      return new Date().toISOString();
+    }
+    
+    // === Projects ===
+    export async function getProjects(): Promise<Project[]> {
+      return getDb().projects.toArray();
+    }
+    
+    // === Users ===
+    export async function getUsers(): Promise<User[]> {
+      return getDb().users.toArray();
+    }
+    
+    export async function getUser(id: string): Promise<User | undefined> {
+      return getDb().users.get(id);
+    }
+    
+    export async function getProjectMembers(projectId: string): Promise<{ user: User; role: string }[]> {
+      const db = getDb();
+      const members = await db.project_members.where('project_id').equals(projectId).toArray();
+      const users = await db.users.toArray();
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      return members.map((m) => ({ user: userMap.get(m.user_id)!, role: m.role })).filter((m) => m.user);
+    }
+    
+    export async function getAllProjectMembers(): Promise<{ project_id: string; user_id: string; role: string }[]> {
+      return getDb().project_members.toArray();
+    }
+    
+    // === Tasks ===
+    export async function getTasksByProject(projectId: string): Promise<Task[]> {
+      return getDb().tasks.where('project_id').equals(projectId).toArray();
+    }
+    
+    export async function getAllTasks(): Promise<Task[]> {
+      return getDb().tasks.toArray();
+    }
+    
+    export async function getTask(id: string): Promise<Task | undefined> {
+      return getDb().tasks.get(id);
+    }
+    
+    export async function createTask(data: {
+      project_id: string;
+      purpose: TaskPurpose;
+      title: string;
+      body: string;
+      due_at: string | null;
+      created_by: string;
+      status: TaskStatus;
+      assignee_user_ids: string[];
+      successor_user_id: string | null;
+    }): Promise<Task> {
+      const db = getDb();
+      const id = uuid();
+      const ts = now();
+      const task: Task = {
+        id,
+        project_id: data.project_id,
+        purpose: data.purpose,
+        title: data.title,
+        body: data.body,
+        status: data.status,
+        due_at: data.due_at,
+        created_by: data.created_by,
+        created_at: ts,
+        updated_at: ts,
+        opened_at: data.status === 'open' ? ts : null,
+        closed_at: null,
+        close_type: null,
+        close_reason: null,
+        closed_by_user_id: null,
+        archived_at: null,
+        successor_user_id: data.successor_user_id,
+      };
+      const assignments: TaskAssignment[] = data.assignee_user_ids.map((uid) => ({
+        id: uuid(),
+        task_id: id,
+        user_id: uid,
+        progress_status: 'pending' as const,
+        assignment_status: 'active' as const,
+        eligibility_status: 'eligible' as const,
+        completed_at: null,
+        updated_at: ts,
+      }));
+      await db.transaction('rw', [db.tasks, db.task_assignments, db.task_activity_events], async () => {
+        await db.tasks.put(task);
+        await db.task_assignments.bulkPut(assignments);
+        await db.task_activity_events.put({
+          id: uuid(),
+          task_id: id,
+          project_id: data.project_id,
+          event_type: data.status === 'open' ? 'task_published' : 'task_drafted',
+          label: data.status === 'open' ? 'タスクを公開しました' : '下書きとして保存しました',
+          user_id: data.created_by,
+          created_at: ts,
+          reason: null,
+        });
+      });
+      return task;
+    }
+    
+    export async function updateTask(taskId: string, updates: Partial<Task>): Promise<void> {
+      await getDb().tasks.update(taskId, { ...updates, updated_at: now() });
+    }
+    
+    export async function setTaskStatus(taskId: string, status: TaskStatus, extra?: Partial<Task>): Promise<void> {
+      await getDb().tasks.update(taskId, { status, ...extra, updated_at: now() });
+    }
+    
+    // === Assignments ===
+    export async function getAssignmentsByTask(taskId: string): Promise<TaskAssignment[]> {
+      return getDb().task_assignments.where('task_id').equals(taskId).toArray();
+    }
+    
+    export async function getAllAssignments(taskIds: string[]): Promise<TaskAssignment[]> {
+      const db = getDb();
+      const result: TaskAssignment[] = [];
+      for (const id of taskIds) {
+        const a = await db.task_assignments.where('task_id').equals(id).toArray();
+        result.push(...a);
+      }
+      return result;
+    }
+    
+    export async function getAllAssignmentsByUser(userId: string): Promise<TaskAssignment[]> {
+      return getDb().task_assignments.where('user_id').equals(userId).toArray();
+    }
+    
+    export async function updateAssignment(assignmentId: string, updates: Partial<TaskAssignment>): Promise<void> {
+      await getDb().task_assignments.update(assignmentId, { ...updates, updated_at: now() });
+    }
+    
+    export async function getAssignment(assignmentId: string): Promise<TaskAssignment | undefined> {
+      return getDb().task_assignments.get(assignmentId);
+    }
+    
+    export async function getAssignmentByUserAndTask(taskId: string, userId: string): Promise<TaskAssignment | undefined> {
+      const db = getDb();
+      const all = await db.task_assignments.where('task_id').equals(taskId).toArray();
+      return all.find((a) => a.user_id === userId);
+    }
+    
+    // === Submissions ===
+    export async function getSubmissionsByAssignment(assignmentId: string): Promise<AssignmentSubmission[]> {
+      const db = getDb();
+      return db.assignment_submissions.where('assignment_id').equals(assignmentId).sortBy('submitted_at');
+    }
+    
+    export async function getAllSubmissionsByTask(taskId: string): Promise<AssignmentSubmission[]> {
+      const db = getDb();
+      const assignments = await db.task_assignments.where('task_id').equals(taskId).toArray();
+      const result: AssignmentSubmission[] = [];
+      for (const a of assignments) {
+        const subs = await db.assignment_submissions.where('assignment_id').equals(a.id).toArray();
+        result.push(...subs);
+      }
+      return result;
+    }
+    
+    export async function createSubmission(data: {
+      assignment_id: string;
+      submission_type: SubmissionType;
+      body: string;
+      submitted_by: string;
+    }): Promise<AssignmentSubmission> {
+      const db = getDb();
+      const existing = await db.assignment_submissions.where('assignment_id').equals(data.assignment_id).toArray();
+      const maxNo = existing.reduce((max, s) => Math.max(max, s.submission_no), 0);
+      const ts = now();
+      const sub: AssignmentSubmission = {
+        id: uuid(),
+        assignment_id: data.assignment_id,
+        submission_type: data.submission_type,
+        submission_no: maxNo + 1,
+        body: data.body,
+        submission_status: 'submitted',
+        submitted_by: data.submitted_by,
+        submitted_at: ts,
+        reviewed_by_user_id: null,
+        reviewed_at: null,
+        review_comment: null,
+      };
+      await db.assignment_submissions.put(sub);
+      return sub;
+    }
+    
+    export async function updateSubmission(submissionId: string, updates: Partial<AssignmentSubmission>): Promise<void> {
+      await getDb().assignment_submissions.update(submissionId, updates);
+    }
+    
+    // === Attachments ===
+    export async function getAttachmentsByTask(taskId: string): Promise<TaskAttachment[]> {
+      return getDb().task_attachments.where('task_id').equals(taskId).toArray();
+    }
+    
+    export async function getAttachment(id: string): Promise<TaskAttachment | undefined> {
+      return getDb().task_attachments.get(id);
+    }
+    
+    export async function createAttachment(data: {
+      task_id: string;
+      name: string;
+      attachment_type: AttachmentType;
+      uploaded_by: string;
+    }): Promise<TaskAttachment> {
+      const db = getDb();
+      const id = uuid();
+      const ts = now();
+      const att: TaskAttachment = {
+        id,
+        task_id: data.task_id,
+        name: data.name,
+        attachment_type: data.attachment_type,
+        attachment_status: 'active',
+        uploaded_by: data.uploaded_by,
+        uploaded_at: ts,
+        current_revision_no: 1,
+        withdrawn_at: null,
+        withdrawal_reason: null,
+      };
+      const rev: AttachmentRevision = {
+        id: uuid(),
+        attachment_id: id,
+        revision_no: 1,
+        filename: data.name,
+        revision_reason: null,
+        uploaded_by: data.uploaded_by,
+        uploaded_at: ts,
+      };
+      await db.transaction('rw', [db.task_attachments, db.attachment_revisions], async () => {
+        await db.task_attachments.put(att);
+        await db.attachment_revisions.put(rev);
+      });
+      return att;
+    }
+    
+    export async function getRevisionsByAttachment(attachmentId: string): Promise<AttachmentRevision[]> {
+      return getDb().attachment_revisions.where('attachment_id').equals(attachmentId).sortBy('revision_no');
+    }
+    
+    export async function reviseAttachment(attachmentId: string, reason: string, userId: string): Promise<void> {
+      const db = getDb();
+      const att = await db.task_attachments.get(attachmentId);
+      if (!att) return;
+      const newRevNo = att.current_revision_no + 1;
+      const ts = now();
+      const rev: AttachmentRevision = {
+        id: uuid(),
+        attachment_id: attachmentId,
+        revision_no: newRevNo,
+        filename: att.name,
+        revision_reason: reason,
+        uploaded_by: userId,
+        uploaded_at: ts,
+      };
+      await db.transaction('rw', [db.task_attachments, db.attachment_revisions], async () => {
+        await db.task_attachments.update(attachmentId, { current_revision_no: newRevNo });
+        await db.attachment_revisions.put(rev);
+      });
+    }
+    
+    export async function withdrawAttachment(attachmentId: string, reason: string): Promise<void> {
+      const db = getDb();
+      const ts = now();
+      await db.task_attachments.update(attachmentId, {
+        attachment_status: 'withdrawn',
+        withdrawn_at: ts,
+        withdrawal_reason: reason,
+      });
+    }
+    
+    // === Document Requirements ===
+    export async function getRequirementsByAssignment(assignmentId: string): Promise<AssignmentDocumentRequirement[]> {
+      return getDb().assignment_document_requirements.where('assignment_id').equals(assignmentId).toArray();
+    }
+    
+    export async function getRequirementsByAttachment(attachmentId: string): Promise<AssignmentDocumentRequirement[]> {
+      return getDb().assignment_document_requirements.where('attachment_id').equals(attachmentId).toArray();
+    }
+    
+    export async function getAllRequirementsForTask(taskId: string): Promise<AssignmentDocumentRequirement[]> {
+      const db = getDb();
+      const assignments = await db.task_assignments.where('task_id').equals(taskId).toArray();
+      const result: AssignmentDocumentRequirement[] = [];
+      for (const a of assignments) {
+        const reqs = await db.assignment_document_requirements.where('assignment_id').equals(a.id).toArray();
+        result.push(...reqs);
+      }
+      return result;
+    }
+    
+    export async function createRequirementsForAssignment(assignmentId: string, attachmentId: string, revisionNo: number): Promise<void> {
+      const db = getDb();
+      await db.assignment_document_requirements.put({
+        id: uuid(),
+        assignment_id: assignmentId,
+        attachment_id: attachmentId,
+        required_revision_no: revisionNo,
+        accessed_revision_no: null,
+        accessed_at: null,
+        access_method: null,
+        confirmed_revision_no: null,
+        confirmed_at: null,
+        requirement_status: 'required',
+      });
+    }
+    
+    export async function updateRequirement(reqId: string, updates: Partial<AssignmentDocumentRequirement>): Promise<void> {
+      await getDb().assignment_document_requirements.update(reqId, updates);
+    }
+    
+    export async function getRequirement(assignmentId: string, attachmentId: string): Promise<AssignmentDocumentRequirement | undefined> {
+      const db = getDb();
+      const all = await db.assignment_document_requirements.where('assignment_id').equals(assignmentId).toArray();
+      return all.find((r) => r.attachment_id === attachmentId);
+    }
+    
+    // === Chat ===
+    export async function getChatMessages(taskId: string): Promise<{ id: string; user_id: string; text: string; attachment_filename: string | null; created_at: string }[]> {
+      return getDb().task_chat_messages.where('task_id').equals(taskId).sortBy('created_at');
+    }
+    
+    export async function addChatMessage(taskId: string, userId: string, text: string, attachmentFilename: string | null): Promise<void> {
+      await getDb().task_chat_messages.put({
+        id: uuid(), task_id: taskId, user_id: userId, text,
+        attachment_filename: attachmentFilename, created_at: now(),
+      });
+    }
+    
+    // === Notes ===
+    export async function getNotes(taskId: string): Promise<TaskNote[]> {
+      return getDb().task_notes.where('task_id').equals(taskId).sortBy('created_at');
+    }
+    
+    export async function getAllNotes(): Promise<TaskNote[]> {
+      return getDb().task_notes.toArray();
+    }
+    
+    export async function addNote(taskId: string, userId: string, visibility: 'shared' | 'personal', color: string, text: string, attachmentFilename: string | null): Promise<void> {
+      const ts = now();
+      await getDb().task_notes.put({
+        id: uuid(), task_id: taskId, user_id: userId, visibility, color, text,
+        attachment_filename: attachmentFilename, created_at: ts, updated_at: ts,
+      });
+    }
+    
+    export async function updateNote(noteId: string, updates: { text?: string; color?: string; attachment_filename?: string | null }): Promise<void> {
+      const db = getDb();
+      const note = await db.task_notes.get(noteId);
+      if (!note) return;
+      await db.task_notes.put({
+        ...note,
+        ...updates,
+        updated_at: now(),
+      });
+    }
+    
+    export async function deleteNoteAtomic(noteId: string): Promise<void> {
+      const db = getDb();
+      await db.transaction('rw', [db.task_notes, db.task_note_favorites], async () => {
+        await db.task_notes.delete(noteId);
+        await db.task_note_favorites.where('note_id').equals(noteId).delete();
+      });
+    }
+    
+    export async function getNote(noteId: string): Promise<TaskNote | undefined> {
+      return getDb().task_notes.get(noteId);
+    }
+    
+    // === Note Favorites ===
+    export async function getNoteFavorites(userId: string): Promise<TaskNoteFavorite[]> {
+      return getDb().task_note_favorites.where('user_id').equals(userId).toArray();
+    }
+    
+    export async function addNoteFavorite(noteId: string, userId: string): Promise<void> {
+      const db = getDb();
+      const existing = await db.task_note_favorites
+        .where('[note_id+user_id]').equals([noteId, userId]).first();
+      if (!existing) {
+        await db.task_note_favorites.put({
+          id: uuid(), note_id: noteId, user_id: userId, created_at: now(),
+        });
+      }
+    }
+    
+    export async function removeNoteFavorite(noteId: string, userId: string): Promise<void> {
+      const db = getDb();
+      const fav = await db.task_note_favorites
+        .where('[note_id+user_id]').equals([noteId, userId]).first();
+      if (fav) await db.task_note_favorites.delete(fav.id);
+    }
+    
+    // === Todos ===
+    export async function getTodos(taskId: string, userId: string): Promise<{ id: string; text: string; done: boolean }[]> {
+      const db = getDb();
+      const all = await db.task_todos.where('task_id').equals(taskId).toArray();
+      return all.filter((t) => t.user_id === userId);
+    }
+    
+    export async function addTodo(taskId: string, userId: string, text: string): Promise<void> {
+      await getDb().task_todos.put({
+        id: uuid(), task_id: taskId, user_id: userId, text, done: false, created_at: now(),
+      });
+    }
+    
+    export async function toggleTodo(todoId: string): Promise<void> {
+      const db = getDb();
+      const todo = await db.task_todos.get(todoId);
+      if (todo) await db.task_todos.update(todoId, { done: !todo.done });
+    }
+    
+    export async function deleteTodo(todoId: string): Promise<void> {
+      await getDb().task_todos.delete(todoId);
+    }
+    
+    // === Activity ===
+    export async function getRecentActivity(projectId: string, limit: number): Promise<TaskActivityEvent[]> {
+      const db = getDb();
+      const events = await db.task_activity_events.where('project_id').equals(projectId).reverse().sortBy('created_at');
+      return events.slice(0, limit);
+    }
+    
+    export async function getActivityByTask(taskId: string, limit: number): Promise<TaskActivityEvent[]> {
+      const db = getDb();
+      const events = await db.task_activity_events.where('task_id').equals(taskId).reverse().sortBy('created_at');
+      return events.slice(0, limit);
+    }
+    
+    export async function addActivityEvent(data: {
+      task_id: string;
+      project_id: string;
+      event_type: string;
+      label: string;
+      user_id: string;
+      reason?: string | null;
+    }): Promise<void> {
+      await getDb().task_activity_events.put({
+        id: uuid(),
+        task_id: data.task_id,
+        project_id: data.project_id,
+        event_type: data.event_type,
+        label: data.label,
+        user_id: data.user_id,
+        created_at: now(),
+        reason: data.reason ?? null,
+      });
+    }
+    
+    // === Personal Tasks ===
+    export async function getPersonalTasksByOwner(userId: string): Promise<PersonalTask[]> {
+      return getDb().personal_tasks.where('owner_user_id').equals(userId).toArray();
+    }
+    
+    export async function getPersonalTask(id: string): Promise<PersonalTask | undefined> {
+      return getDb().personal_tasks.get(id);
+    }
+    
+    export async function createPersonalTask(data: {
+      owner_user_id: string;
+      title: string;
+      body: string;
+      related_project_id: string | null;
+      due_at: string | null;
+      status: PersonalTask['status'];
+    }): Promise<PersonalTask> {
+      const db = getDb();
+      const id = uuid();
+      const ts = now();
+      const task: PersonalTask = {
+        id,
+        owner_user_id: data.owner_user_id,
+        title: data.title,
+        body: data.body,
+        related_project_id: data.related_project_id,
+        due_at: data.due_at,
+        status: data.status,
+        created_at: ts,
+        updated_at: ts,
+        started_at: null,
+        archived_at: null,
+      };
+      await db.personal_tasks.put(task);
+      return task;
+    }
+    
+    export async function updatePersonalTask(id: string, updates: Partial<PersonalTask>): Promise<void> {
+      await getDb().personal_tasks.update(id, { ...updates, updated_at: now() });
+    }
+    
+    export async function deletePersonalTaskAtomic(id: string, deletionEvent: { owner_user_id: string; was_overdue: boolean; had_related_project: boolean }): Promise<void> {
+      const db = getDb();
+      await db.transaction('rw', [db.personal_tasks, db.personal_task_attachments, db.personal_task_deletion_events], async () => {
+        await db.personal_tasks.delete(id);
+        await db.personal_task_attachments.where('personal_task_id').equals(id).delete();
+        await db.personal_task_deletion_events.put({
+          id: uuid(),
+          owner_user_id: deletionEvent.owner_user_id,
+          deleted_at: now(),
+          was_overdue: deletionEvent.was_overdue,
+          had_related_project: deletionEvent.had_related_project,
+        });
+      });
+    }
+    
+    export async function getPersonalTaskAttachments(taskId: string): Promise<PersonalTaskAttachment[]> {
+      return getDb().personal_task_attachments.where('personal_task_id').equals(taskId).toArray();
+    }
+    
+    export async function addPersonalTaskAttachment(taskId: string, displayName: string): Promise<void> {
+      await getDb().personal_task_attachments.put({
+        id: uuid(),
+        personal_task_id: taskId,
+        display_name: displayName,
+        created_at: now(),
+      });
+    }
+    
+    export async function deletePersonalTaskAttachment(attachmentId: string): Promise<void> {
+      await getDb().personal_task_attachments.delete(attachmentId);
+    }
+    
+    export async function createPersonalTaskDeletionEvent(data: {
+      owner_user_id: string;
+      was_overdue: boolean;
+      had_related_project: boolean;
+    }): Promise<void> {
+      await getDb().personal_task_deletion_events.put({
+        id: uuid(),
+        owner_user_id: data.owner_user_id,
+        deleted_at: now(),
+        was_overdue: data.was_overdue,
+        had_related_project: data.had_related_project,
+      });
+    }
+    
+    // === Templates ===
+    export async function getAllTemplates(): Promise<TaskTemplate[]> {
+      return getDb().task_templates.where('status').equals('active').toArray();
+    }
+    
+    export async function getTemplate(id: string): Promise<TaskTemplate | undefined> {
+      return getDb().task_templates.get(id);
+    }
+    
+    export async function createTemplate(data: {
+      name: string;
+      purpose: TaskPurpose;
+      title_template: string;
+      body_template: string;
+      created_by_user_id: string;
+      source_task_id: string | null;
+    }): Promise<TaskTemplate> {
+      const db = getDb();
+      const id = uuid();
+      const ts = now();
+      const template: TaskTemplate = {
+        id,
+        name: data.name,
+        purpose: data.purpose,
+        title_template: data.title_template,
+        body_template: data.body_template,
+        created_by_user_id: data.created_by_user_id,
+        created_at: ts,
+        updated_at: ts,
+        source_task_id: data.source_task_id,
+        status: 'active',
+      };
+      await db.task_templates.put(template);
+      return template;
+    }
+    
+    export async function getTemplateAttachments(templateId: string): Promise<TaskTemplateAttachment[]> {
+      return getDb().task_template_attachments.where('template_id').equals(templateId).sortBy('sort_order');
+    }
+    
+    export async function addTemplateAttachment(data: {
+      template_id: string;
+      display_name: string;
+      attachment_type: AttachmentType;
+      sort_order: number;
+    }): Promise<void> {
+      await getDb().task_template_attachments.put({
+        id: uuid(),
+        template_id: data.template_id,
+        display_name: data.display_name,
+        attachment_type: data.attachment_type,
+        sort_order: data.sort_order,
+      });
+    }
+    
+    
+    export async function deleteTemplateAtomic(templateId: string, ownerUserId: string): Promise<void> {
+      const db = getDb();
+      const template = await db.task_templates.get(templateId);
+    
+      // 他ユーザーのテンプレートは削除不可
+      if (!template || template.created_by_user_id !== ownerUserId) return;
+    
+      await db.transaction(
+        'rw',
+        [db.task_templates, db.task_template_attachments, db.task_template_favorites],
+        async () => {
+          await db.task_template_attachments.where('template_id').equals(templateId).delete();
+          await db.task_template_favorites.where('template_id').equals(templateId).delete();
+          await db.task_templates.delete(templateId);
+        },
+      );
+    }
+    export async function getTemplateFavorites(userId: string): Promise<TaskTemplateFavorite[]> {
+      return getDb().task_template_favorites.where('user_id').equals(userId).toArray();
+    }
+    
+    export async function addTemplateFavorite(templateId: string, userId: string): Promise<void> {
+      const db = getDb();
+      const existing = await db.task_template_favorites
+        .where('[template_id+user_id]').equals([templateId, userId]).first();
+      if (!existing) {
+        await db.task_template_favorites.put({
+          id: uuid(), template_id: templateId, user_id: userId, created_at: now(),
+        });
+      }
+    }
+    
+    export async function removeTemplateFavorite(templateId: string, userId: string): Promise<void> {
+      const db = getDb();
+      const fav = await db.task_template_favorites
+        .where('[template_id+user_id]').equals([templateId, userId]).first();
+      if (fav) await db.task_template_favorites.delete(fav.id);
+    }
+    
+    
+    // ==========================================================
+    // Chat attachment promotion requests
+    // ==========================================================
+    
+    export async function getChatAttachmentPromotionsByTask(
+      taskId: string,
+    ): Promise<ChatAttachmentPromotion[]> {
+      return getDb()
+        .chat_attachment_promotions
+        .where('task_id')
+        .equals(taskId)
+        .toArray();
+    }
+    
+    export async function getChatAttachmentPromotionByChatMessage(
+      taskId: string,
+      chatMessageId: string,
+    ): Promise<ChatAttachmentPromotion | undefined> {
+      // 複合インデックスの書式差異に依存しないよう、
+      // タスク内の申請を取得してからチャットIDで特定する。
+      const promotions = await getChatAttachmentPromotionsByTask(taskId);
+    
+      return promotions.find(
+        (promotion) => promotion.chat_message_id === chatMessageId,
+      );
+    }
+    
+    export async function createChatAttachmentPromotion(data: {
+      task_id: string;
+      chat_message_id: string;
+      attachment_filename: string;
+      requested_by_user_id: string;
+    }): Promise<ChatAttachmentPromotion> {
+      const existing = await getChatAttachmentPromotionByChatMessage(
+        data.task_id,
+        data.chat_message_id,
+      );
+    
+      // 同じタスクの同じチャット添付に対する二重申請を防止する。
+      if (existing) return existing;
+    
+      const promotion: ChatAttachmentPromotion = {
+        id: uuid(),
+        task_id: data.task_id,
+        chat_message_id: data.chat_message_id,
+        attachment_filename: data.attachment_filename,
+        requested_by_user_id: data.requested_by_user_id,
+        requested_at: now(),
+        status: 'pending',
+        approved_by_user_id: null,
+        approved_at: null,
+        created_attachment_id: null,
+      };
+    
+      await getDb().chat_attachment_promotions.put(promotion);
+    
+      return promotion;
+    }
+    
+    export async function approveChatAttachmentPromotion(
+      promotionId: string,
+      approvedByUserId: string,
+      createdAttachmentId: string | null,
+    ): Promise<void> {
+      await getDb().chat_attachment_promotions.update(promotionId, {
+        status: 'approved',
+        approved_by_user_id: approvedByUserId,
+        approved_at: now(),
+        created_attachment_id: createdAttachmentId,
+      });
+    }
+    
+    // ==========================================================
+    // Completed / archived shared task review metadata
+    // ==========================================================
+    
+    export async function getTaskCompletionReview(
+      taskId: string,
+    ): Promise<TaskCompletionReview | undefined> {
+      return getDb()
+        .task_completion_reviews
+        .where('task_id')
+        .equals(taskId)
+        .first();
+    }
+    
+    export async function getTaskCompletionReviews(
+      taskIds: string[],
+    ): Promise<TaskCompletionReview[]> {
+      if (taskIds.length === 0) return [];
+    
+      const targetTaskIds = new Set(taskIds);
+      const allReviews = await getDb().task_completion_reviews.toArray();
+    
+      return allReviews.filter((review) => targetTaskIds.has(review.task_id));
+    }
+    
+    export async function upsertTaskCompletionReview(data: {
+      task_id: string;
+      updated_by_user_id: string;
+      ai_analysis_output_generated_at?: string | null;
+      ai_summary?: string | null;
+      admin_comment?: string | null;
+    }): Promise<TaskCompletionReview> {
+      const db = getDb();
+      const existing = await getTaskCompletionReview(data.task_id);
+      const timestamp = now();
+    
+      const review: TaskCompletionReview = {
+        id: existing?.id ?? uuid(),
+        task_id: data.task_id,
+        ai_analysis_output_generated_at:
+          'ai_analysis_output_generated_at' in data
+            ? data.ai_analysis_output_generated_at ?? null
+            : existing?.ai_analysis_output_generated_at ?? null,
+        ai_summary:
+          'ai_summary' in data
+            ? data.ai_summary ?? null
+            : existing?.ai_summary ?? null,
+        admin_comment:
+          'admin_comment' in data
+            ? data.admin_comment ?? null
+            : existing?.admin_comment ?? null,
+        updated_by_user_id: data.updated_by_user_id,
+        created_at: existing?.created_at ?? timestamp,
+        updated_at: timestamp,
+      };
+    
+      await db.task_completion_reviews.put(review);
+    
+      return review;
+    }
+    
+    export async function getTaskFavoritesByUser(
+      userId: string,
+    ): Promise<TaskFavorite[]> {
+      return getDb().task_favorites.where('user_id').equals(userId).toArray();
+    }
+    
+    export async function addTaskFavorite(
+      taskId: string,
+      userId: string,
+    ): Promise<void> {
+      const db = getDb();
+    
+      const existing = await db.task_favorites
+        .where('[task_id+user_id]')
+        .equals([taskId, userId])
+        .first();
+    
+      if (existing) return;
+    
+      await db.task_favorites.put({
+        id: uuid(),
+        task_id: taskId,
+        user_id: userId,
+        created_at: now(),
+      });
+    }
+    
+    export async function removeTaskFavorite(
+      taskId: string,
+      userId: string,
+    ): Promise<void> {
+      const db = getDb();
+    
+      const existing = await db.task_favorites
+        .where('[task_id+user_id]')
+        .equals([taskId, userId])
+        .first();
+    
+      if (existing) {
+        await db.task_favorites.delete(existing.id);
+      }
+    }
+    
+    export async function archiveTaskWithCompletionReviewAtomic(data: {
+      task_id: string;
+      ai_summary: string | null;
+      admin_comment: string | null;
+      updated_by_user_id: string;
+    }): Promise<void> {
+      const db = getDb();
+      const existingReview = await getTaskCompletionReview(data.task_id);
+      const timestamp = now();
+    
+      await db.transaction(
+        'rw',
+        [db.tasks, db.task_completion_reviews],
+        async () => {
+          await db.task_completion_reviews.put({
+            id: existingReview?.id ?? uuid(),
+            task_id: data.task_id,
+            ai_analysis_output_generated_at:
+              existingReview?.ai_analysis_output_generated_at ?? null,
+            ai_summary: data.ai_summary,
+            admin_comment: data.admin_comment,
+            updated_by_user_id: data.updated_by_user_id,
+            created_at: existingReview?.created_at ?? timestamp,
+            updated_at: timestamp,
+          });
+    
+          await db.tasks.update(data.task_id, {
+            status: 'archived',
+            archived_at: timestamp,
+            updated_at: timestamp,
+          });
+        },
+      );
+    }
+    
+    export async function deleteSharedTaskAtomic(
+      taskId: string,
+    ): Promise<void> {
+      const db = getDb();
+    
+      await db.transaction(
+        'rw',
+        [
+          db.tasks,
+          db.task_assignments,
+          db.assignment_submissions,
+          db.task_attachments,
+          db.attachment_revisions,
+          db.assignment_document_requirements,
+          db.task_chat_messages,
+          db.task_notes,
+          db.task_note_favorites,
+          db.task_todos,
+          db.task_activity_events,
+          db.chat_attachment_promotions,
+          db.task_completion_reviews,
+          db.task_favorites,
+        ],
+        async () => {
+          const assignments = await db.task_assignments
+            .where('task_id')
+            .equals(taskId)
+            .toArray();
+    
+          const attachments = await db.task_attachments
+            .where('task_id')
+            .equals(taskId)
+            .toArray();
+    
+          const notes = await db.task_notes
+            .where('task_id')
+            .equals(taskId)
+            .toArray();
+    
+          for (const assignment of assignments) {
+            await db.assignment_submissions
+              .where('assignment_id')
+              .equals(assignment.id)
+              .delete();
+    
+            await db.assignment_document_requirements
+              .where('assignment_id')
+              .equals(assignment.id)
+              .delete();
+          }
+    
+          for (const attachment of attachments) {
+            await db.attachment_revisions
+              .where('attachment_id')
+              .equals(attachment.id)
+              .delete();
+          }
+    
+          for (const note of notes) {
+            await db.task_note_favorites
+              .where('note_id')
+              .equals(note.id)
+              .delete();
+          }
+    
+          await db.task_assignments.where('task_id').equals(taskId).delete();
+          await db.task_attachments.where('task_id').equals(taskId).delete();
+          await db.task_chat_messages.where('task_id').equals(taskId).delete();
+          await db.task_notes.where('task_id').equals(taskId).delete();
+          await db.task_todos.where('task_id').equals(taskId).delete();
+          await db.task_activity_events.where('task_id').equals(taskId).delete();
+          await db.chat_attachment_promotions.where('task_id').equals(taskId).delete();
+          await db.task_completion_reviews.where('task_id').equals(taskId).delete();
+          await db.task_favorites.where('task_id').equals(taskId).delete();
+    
+          await db.tasks.delete(taskId);
+        },
+      );
+    }
+    
+    ============================================================
+    FILE: src\domain\taskNaviTypes.ts
+    ============================================================
+    // Domain types for TASK-NAVI local development v3
+    
+    // === Persisted entity types (IndexedDB) ===
+    
+    export type TaskStatus = 'draft' | 'open' | 'closed' | 'archived';
+    export type CloseType = 'auto' | 'forced';
+    export type ProgressStatus = 'pending' | 'confirmed' | 'reported' | 'accepted' | 'returned';
+    export type AssignmentStatus = 'active' | 'excluded';
+    export type EligibilityStatus = 'eligible' | 'exempted' | 'out_of_scope';
+    export type TaskPurpose = '作業依頼' | '確認・判断依頼' | '周知・意見聴取' | '回答・申込受付';
+    export type NoteVisibility = 'shared' | 'personal';
+    export type AttachmentType = 'reference' | 'confirmation_required';
+    export type AttachmentStatus = 'active' | 'withdrawn';
+    export type RequirementStatus = 'required' | 'confirmed' | 'not_required';
+    export type AccessMethod = 'view' | 'download';
+    export type SubmissionType = 'response' | 'work_report';
+    export type SubmissionStatus = 'submitted' | 'accepted' | 'returned';
+    
+    // Personal task types
+    export type PersonalTaskStatus = 'draft' | 'open' | 'archived';
+    
+    export interface PersonalTask {
+      id: string;
+      owner_user_id: string;
+      title: string;
+      body: string;
+      related_project_id: string | null;
+      due_at: string | null;
+      status: PersonalTaskStatus;
+      created_at: string;
+      updated_at: string;
+      started_at: string | null;
+      archived_at: string | null;
+    }
+    
+    export interface PersonalTaskAttachment {
+      id: string;
+      personal_task_id: string;
+      display_name: string;
+      created_at: string;
+    }
+    
+    export interface PersonalTaskDeletionEvent {
+      id: string;
+      owner_user_id: string;
+      deleted_at: string;
+      was_overdue: boolean;
+      had_related_project: boolean;
+    }
+    
+    // Template types
+    export type TemplateStatus = 'active' | 'archived';
+    
+    export interface TaskTemplate {
+      id: string;
+      name: string;
+      purpose: TaskPurpose;
+      title_template: string;
+      body_template: string;
+      created_by_user_id: string;
+      created_at: string;
+      updated_at: string;
+      source_task_id: string | null;
+      status: TemplateStatus;
+    }
+    
+    export interface TaskTemplateAttachment {
+      id: string;
+      template_id: string;
+      display_name: string;
+      attachment_type: AttachmentType;
+      sort_order: number;
+    }
+    
+    export interface TaskTemplateFavorite {
+      id: string;
+      template_id: string;
+      user_id: string;
+      created_at: string;
+    }
+    
+    // === Existing shared task entities ===
+    
+    export interface Project {
+      id: string;
+      name: string;
+      color: string;
+      created_at: string;
+    }
+    
+    export interface User {
+      id: string;
+      name: string;
+      avatar_class: string;
+      initials: string;
+    }
+    
+    export interface ProjectMember {
+      id: string;
+      project_id: string;
+      user_id: string;
+      role: string;
+    }
+    
+    export interface Task {
+      id: string;
+      project_id: string;
+      purpose: TaskPurpose;
+      title: string;
+      body: string;
+      status: TaskStatus;
+      due_at: string | null;
+      created_by: string;
+      created_at: string;
+      updated_at: string;
+      opened_at: string | null;
+      closed_at: string | null;
+      close_type: CloseType | null;
+      close_reason: string | null;
+      closed_by_user_id: string | null;
+      archived_at: string | null;
+      successor_user_id: string | null;
+    }
+    
+    export interface TaskAssignment {
+      id: string;
+      task_id: string;
+      user_id: string;
+      progress_status: ProgressStatus;
+      assignment_status: AssignmentStatus;
+      eligibility_status: EligibilityStatus;
+      completed_at: string | null;
+      updated_at: string;
+    }
+    
+    export interface AssignmentSubmission {
+      id: string;
+      assignment_id: string;
+      submission_type: SubmissionType;
+      submission_no: number;
+      body: string;
+      submission_status: SubmissionStatus;
+      submitted_by: string;
+      submitted_at: string;
+      reviewed_by_user_id: string | null;
+      reviewed_at: string | null;
+      review_comment: string | null;
+    }
+    
+    export interface TaskAttachment {
+      id: string;
+      task_id: string;
+      name: string;
+      attachment_type: AttachmentType;
+      attachment_status: AttachmentStatus;
+      uploaded_by: string;
+      uploaded_at: string;
+      current_revision_no: number;
+      withdrawn_at: string | null;
+      withdrawal_reason: string | null;
+    }
+    
+    export interface AttachmentRevision {
+      id: string;
+      attachment_id: string;
+      revision_no: number;
+      filename: string;
+      revision_reason: string | null;
+      uploaded_by: string;
+      uploaded_at: string;
+    }
+    
+    export interface AssignmentDocumentRequirement {
+      id: string;
+      assignment_id: string;
+      attachment_id: string;
+      required_revision_no: number;
+      accessed_revision_no: number | null;
+      accessed_at: string | null;
+      access_method: AccessMethod | null;
+      confirmed_revision_no: number | null;
+      confirmed_at: string | null;
+      requirement_status: RequirementStatus;
+    }
+    
+    export interface TaskChatMessage {
+      id: string;
+      task_id: string;
+      user_id: string;
+      text: string;
+      attachment_filename: string | null;
+      created_at: string;
+    }
+    
+    export interface TaskNote {
+      id: string;
+      task_id: string;
+      user_id: string;
+      visibility: NoteVisibility;
+      color: string;
+      text: string;
+      attachment_filename: string | null;
+      created_at: string;
+      updated_at: string;
+    }
+    
+    export interface TaskNoteFavorite {
+      id: string;
+      note_id: string;
+      user_id: string;
+      created_at: string;
+    }
+    
+    export interface TaskTodo {
+      id: string;
+      task_id: string;
+      user_id: string;
+      text: string;
+      done: boolean;
+      created_at: string;
+    }
+    
+    export interface TaskActivityEvent {
+      id: string;
+      task_id: string;
+      project_id: string;
+      event_type: string;
+      label: string;
+      user_id: string;
+      created_at: string;
+      reason: string | null;
+    }
+    
+    // === View model types (computed, not persisted) ===
+    
+    export type DisplayBadge = 'overdue' | 'returned' | 'accept_pending' | 'confirm_pending' | 'answer_pending' | 'in_progress';
+    
+    export type TaskType = 'shared' | 'personal';
+    
+    export interface AssigneeView {
+      assignment_id: string;
+      user_id: string;
+      name: string;
+      avatar_class: string;
+      initials: string;
+      progress_status: ProgressStatus;
+      assignment_status: AssignmentStatus;
+      eligibility_status: EligibilityStatus;
+      is_complete: boolean;
+      is_eligible_active: boolean;
+      completed_at: string | null;
+    }
+    
+    export interface AttachmentView {
+      id: string;
+      name: string;
+      attachment_type: AttachmentType;
+      attachment_type_label: string;
+      attachment_status: AttachmentStatus;
+      current_revision_no: number;
+      uploaded_by_name: string;
+      uploaded_at: string;
+      updated_at_label: string;
+      is_withdrawn: boolean;
+    }
+    
+    export interface RequirementView {
+      attachment_id: string;
+      attachment_name: string;
+      required_revision_no: number;
+      accessed_revision_no: number | null;
+      accessed_at: string | null;
+      access_method: AccessMethod | null;
+      confirmed_revision_no: number | null;
+      confirmed_at: string | null;
+      requirement_status: RequirementStatus;
+      can_confirm: boolean;
+    }
+    
+    export interface SubmissionView {
+      id: string;
+      assignment_id: string;
+      submission_type: SubmissionType;
+      submission_no: number;
+      body: string;
+      submission_status: SubmissionStatus;
+      submitted_by_name: string;
+      submitted_at: string;
+      reviewed_by_name: string | null;
+      reviewed_at: string | null;
+      review_comment: string | null;
+    }
+    
+    export interface AssigneeDetailView extends AssigneeView {
+      submissions: SubmissionView[];
+      requirements: RequirementView[];
+    }
+    
+    export interface HistoryView {
+      id: string;
+      event_type: string;
+      label: string;
+      user_name: string;
+      created_at: string;
+      time_label: string;
+      reason: string | null;
+      icon_color: string;
+    }
+    
+    export interface TaskView {
+      id: string;
+      project_id: string;
+      project_name: string;
+      purpose: TaskPurpose;
+      title: string;
+      body: string;
+      status: TaskStatus;
+      due_at: string | null;
+      due_label: string;
+      created_by: string;
+      created_by_name: string;
+      created_at: string;
+      updated_at: string;
+      badge: DisplayBadge | null;
+      board_column: BoardColumn;
+      progress_percent: number;
+      total_assignees: number;
+      completed_assignees: number;
+      assignees: AssigneeView[];
+      is_creator: boolean;
+      is_assignee: boolean;
+      is_eligible_assignee: boolean;
+      is_successor: boolean;
+      is_related: boolean;
+      close_type: CloseType | null;
+      close_reason: string | null;
+      closed_by_name: string | null;
+      closed_at: string | null;
+      task_type: TaskType;
+      my_progress_label: string | null;
+    
+      // アーカイブ一覧向けの付加情報
+      ai_analysis_output_generated_at?: string | null;
+      ai_summary?: string | null;
+      admin_comment?: string | null;
+      is_favorited?: boolean;}
+    
+    export type BoardColumn = 'draft' | 'in_progress' | 'confirm_answer' | 'accept_return' | 'closed';
+    export type PersonalBoardColumn = 'draft' | 'open' | 'overdue';
+    
+    export interface ChatMessageView {
+      id: string;
+      user_id: string;
+      author: string;
+      avatar_class: string;
+      initials: string;
+      text: string;
+      attachment_filename: string | null;
+      created_at: string;
+      time_label: string;
+      mine: boolean;
+    }
+    
+    export interface NoteView {
+      id: string;
+      text: string;
+      color: string;
+      attachment_filename: string | null;
+      visibility: NoteVisibility;
+      created_at: string;
+      updated_at: string;
+      author_name: string;
+      mine: boolean;
+      is_favorited: boolean;
+    }
+    
+    export interface TodoView {
+      id: string;
+      text: string;
+      done: boolean;
+    }
+    
+    export interface TaskDetailView {
+      task: TaskView;
+      chats: ChatMessageView[];
+      chat_attachment_promotions: ChatAttachmentPromotionView[];
+      shared_notes: NoteView[];
+      personal_notes: NoteView[];
+      todos: TodoView[];
+      attachments: AttachmentView[];
+      my_requirements: RequirementView[];
+      my_assignments: AssigneeDetailView[];
+      all_assignees: AssigneeDetailView[];
+      history: HistoryView[];
+      publish_errors: string[];
+      can_publish: boolean;
+      can_force_close: boolean;
+      can_archive: boolean;
+      my_assignment: AssigneeDetailView | null;
+      can_save_template: boolean;
+      completion_review?: TaskCompletionReviewView | null;
+      can_manage_completion_review?: boolean;}
+    
+    export interface ProjectView {
+      id: string;
+      name: string;
+      color: string;
+    }
+    
+    export interface UserView {
+      id: string;
+      name: string;
+      avatar_class: string;
+      initials: string;
+    }
+    
+    export interface ActivityView {
+      id: string;
+      label: string;
+      event_type: string;
+      task_title: string;
+      user_name: string;
+      time_label: string;
+      icon_color: string;
+    }
+    
+    export interface NoteListView {
+      id: string;
+      text: string;
+      color: string;
+      visibility: NoteVisibility;
+      task_id: string;
+      task_title: string;
+      created_at: string;
+      time_label: string;
+      is_favorited: boolean;
+    }
+    
+    // Personal task view types
+    export interface PersonalTaskAttachmentView {
+      id: string;
+      display_name: string;
+      created_at: string;
+    }
+    
+    export interface PersonalTaskView {
+      id: string;
+      owner_user_id: string;
+      title: string;
+      body: string;
+      related_project_id: string | null;
+      related_project_name: string | null;
+      related_project_accessible: boolean;
+      due_at: string | null;
+      due_label: string;
+      status: PersonalTaskStatus;
+      status_label: string;
+      created_at: string;
+      updated_at: string;
+      started_at: string | null;
+      archived_at: string | null;
+      attachments: PersonalTaskAttachmentView[];
+      is_overdue: boolean;
+      board_column: PersonalBoardColumn;
+      task_type: TaskType;
+    }
+    
+    export interface PersonalTaskDetailView {
+      task: PersonalTaskView;
+      can_start: boolean;
+      can_complete: boolean;
+      can_delete: boolean;
+      can_edit_title: boolean;
+      can_edit_body: boolean;
+      can_edit_due: boolean;
+      can_edit_project: boolean;
+      can_add_attachment: boolean;
+      can_delete_attachment: boolean;
+      start_errors: string[];
+    }
+    
+    // Template view types
+    export interface TemplateAttachmentView {
+      id: string;
+      display_name: string;
+      attachment_type: AttachmentType;
+      attachment_type_label: string;
+      sort_order: number;
+    }
+    
+    export interface TemplateView {
+      id: string;
+      name: string;
+      purpose: TaskPurpose;
+      title_template: string;
+      body_template: string;
+      created_by_name: string;
+      created_at: string;
+      updated_at: string;
+      updated_at_label: string;
+      attachments: TemplateAttachmentView[];
+      is_favorited: boolean;
+      source_task_id: string | null;
+    }
+    
+    // Filter and pagination types
+    export type MyTasksFilter = 'all' | 'my_progress' | 'managing' | 'closed';
+    export type TaskTypeFilter = 'all' | 'shared' | 'personal';
+    export type SharedConditionFilter = 'all' | 'overdue' | 'confirm_answer' | 'accept_pending' | 'returned' | 'in_progress';
+    export type PersonalConditionFilter = 'all' | 'draft' | 'open' | 'overdue' | 'archived';
+    export type PageView = 'guide' | 'my_tasks' | 'shared' | 'personal' | 'notes' | 'archive';
+    
+    export interface PaginationState {
+      page: number;
+      pageSize: number;
+    }
+    
+    export interface SharedSummaryCounts {
+      draft: number;
+      open: number;
+      overdue: number;
+      closed: number;
+      total: number;
+    }
+    
+    export interface PersonalSummaryCounts {
+      draft: number;
+      open: number;
+      overdue: number;
+      total: number;
+    }
+    
+    export interface MyTasksSummaryCounts {
+      all: number;
+      my_progress: number;
+      managing: number;
+      overdue: number;
+      closed: number;
+    }
+    
+    export type ChatAttachmentPromotionStatus = 'pending' | 'approved';
+    
+    export interface ChatAttachmentPromotion {
+      id: string;
+      task_id: string;
+      chat_message_id: string;
+      attachment_filename: string;
+      requested_by_user_id: string;
+      requested_at: string;
+      status: ChatAttachmentPromotionStatus;
+      approved_by_user_id: string | null;
+      approved_at: string | null;
+      created_attachment_id: string | null;
+    }
+    
+    export interface ChatAttachmentPromotionView {
+      id: string;
+      task_id: string;
+      chat_message_id: string;
+      attachment_filename: string;
+      requested_by_user_id: string;
+      requested_by_name: string;
+      requested_at: string;
+      requested_at_label: string;
+      status: ChatAttachmentPromotionStatus;
+      approved_by_user_id: string | null;
+      approved_by_name: string | null;
+      approved_at: string | null;
+      created_attachment_id: string | null;
+    }
+    
+    // ==========================================================
+    // Completed / archived shared task review metadata
+    // ==========================================================
+    
+    export interface TaskCompletionReview {
+      id: string;
+      task_id: string;
+      ai_analysis_output_generated_at: string | null;
+      ai_summary: string | null;
+      admin_comment: string | null;
+      updated_by_user_id: string | null;
+      created_at: string;
+      updated_at: string;
+    }
+    
+    export interface TaskCompletionReviewView {
+      task_id: string;
+      ai_analysis_output_generated_at: string | null;
+      ai_summary: string | null;
+      admin_comment: string | null;
+      updated_by_user_id: string | null;
+      updated_by_name: string | null;
+      updated_at: string;
+      updated_at_label: string;
+    }
+    
+    export interface TaskFavorite {
+      id: string;
+      task_id: string;
+      user_id: string;
+      created_at: string;
+    }
+    

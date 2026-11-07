@@ -1,0 +1,24 @@
+# index.html
+
+- **元ファイル**: index.html
+- **ファイルサイズ**: 604 bytes
+- **作成日時**: 2026-09-16 04:39:52
+
+## ソースコード
+
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Bolt News Web App Prototype</title>
+        <meta property="og:image" content="https://bolt.new/static/og_default.png" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
+      </head>
+      <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+      </body>
+    </html>

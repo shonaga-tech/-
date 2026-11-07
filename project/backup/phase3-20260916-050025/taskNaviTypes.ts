@@ -1,0 +1,603 @@
+// Domain types for TASK-NAVI local development v3
+
+// === Persisted entity types (IndexedDB) ===
+
+export type TaskStatus = 'draft' | 'open' | 'closed' | 'archived';
+export type CloseType = 'auto' | 'forced';
+export type ProgressStatus = 'pending' | 'confirmed' | 'reported' | 'accepted' | 'returned';
+export type AssignmentStatus = 'active' | 'excluded';
+export type EligibilityStatus = 'eligible' | 'exempted' | 'out_of_scope';
+export type TaskPurpose = '作業依頼' | '確認・判断依頼' | '周知・意見聴取' | '回答・申込受付';
+export type NoteVisibility = 'shared' | 'personal';
+export type AttachmentType = 'reference' | 'confirmation_required';
+export type AttachmentStatus = 'active' | 'withdrawn';
+export type RequirementStatus = 'required' | 'confirmed' | 'not_required';
+export type AccessMethod = 'view' | 'download';
+export type SubmissionType = 'response' | 'work_report';
+export type SubmissionStatus = 'submitted' | 'accepted' | 'returned';
+
+// Personal task types
+export type PersonalTaskStatus = 'draft' | 'open' | 'archived';
+
+export interface PersonalTask {
+  id: string;
+  owner_user_id: string;
+  title: string;
+  body: string;
+  related_project_id: string | null;
+  due_at: string | null;
+  status: PersonalTaskStatus;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  archived_at: string | null;
+}
+
+export interface PersonalTaskAttachment {
+  id: string;
+  personal_task_id: string;
+  display_name: string;
+  created_at: string;
+}
+
+export interface PersonalTaskDeletionEvent {
+  id: string;
+  owner_user_id: string;
+  deleted_at: string;
+  was_overdue: boolean;
+  had_related_project: boolean;
+}
+
+// Template types
+export type TemplateStatus = 'active' | 'archived';
+
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  purpose: TaskPurpose;
+  title_template: string;
+  body_template: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+  source_task_id: string | null;
+  status: TemplateStatus;
+}
+
+export interface TaskTemplateAttachment {
+  id: string;
+  template_id: string;
+  display_name: string;
+  attachment_type: AttachmentType;
+  sort_order: number;
+}
+
+export interface TaskTemplateFavorite {
+  id: string;
+  template_id: string;
+  user_id: string;
+  created_at: string;
+}
+
+// === Existing shared task entities ===
+
+export interface Project {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  avatar_class: string;
+  initials: string;
+}
+
+export interface ProjectMember {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: string;
+}
+
+export interface Task {
+  id: string;
+  project_id: string;
+  purpose: TaskPurpose;
+  title: string;
+  body: string;
+  status: TaskStatus;
+  due_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  close_type: CloseType | null;
+  close_reason: string | null;
+  closed_by_user_id: string | null;
+  archived_at: string | null;
+  successor_user_id: string | null;
+}
+
+export interface TaskAssignment {
+  id: string;
+  task_id: string;
+  user_id: string;
+  progress_status: ProgressStatus;
+  assignment_status: AssignmentStatus;
+  eligibility_status: EligibilityStatus;
+  completed_at: string | null;
+  updated_at: string;
+}
+
+export interface AssignmentSubmission {
+  id: string;
+  assignment_id: string;
+  submission_type: SubmissionType;
+  submission_no: number;
+  body: string;
+  submission_status: SubmissionStatus;
+  submitted_by: string;
+  submitted_at: string;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  review_comment: string | null;
+}
+
+export interface TaskAttachment {
+  id: string;
+  task_id: string;
+  name: string;
+  attachment_type: AttachmentType;
+  attachment_status: AttachmentStatus;
+  uploaded_by: string;
+  uploaded_at: string;
+  current_revision_no: number;
+  withdrawn_at: string | null;
+  withdrawal_reason: string | null;
+}
+
+export interface AttachmentRevision {
+  id: string;
+  attachment_id: string;
+  revision_no: number;
+  filename: string;
+  revision_reason: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+
+export interface AssignmentDocumentRequirement {
+  id: string;
+  assignment_id: string;
+  attachment_id: string;
+  required_revision_no: number;
+  accessed_revision_no: number | null;
+  accessed_at: string | null;
+  access_method: AccessMethod | null;
+  confirmed_revision_no: number | null;
+  confirmed_at: string | null;
+  requirement_status: RequirementStatus;
+}
+
+export interface TaskChatMessage {
+  id: string;
+  task_id: string;
+  user_id: string;
+  text: string;
+  attachment_filename: string | null;
+  created_at: string;
+}
+
+export interface TaskNote {
+  id: string;
+  task_id: string;
+  user_id: string;
+  visibility: NoteVisibility;
+  color: string;
+  text: string;
+  attachment_filename: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskNoteFavorite {
+  id: string;
+  note_id: string;
+  user_id: string;
+  created_at: string;
+}
+
+export interface TaskTodo {
+  id: string;
+  task_id: string;
+  user_id: string;
+  text: string;
+  done: boolean;
+  created_at: string;
+}
+
+export interface TaskActivityEvent {
+  id: string;
+  task_id: string;
+  project_id: string;
+  event_type: string;
+  label: string;
+  user_id: string;
+  created_at: string;
+  reason: string | null;
+}
+
+// === View model types (computed, not persisted) ===
+
+export type DisplayBadge = 'overdue' | 'returned' | 'accept_pending' | 'confirm_pending' | 'answer_pending' | 'in_progress';
+
+export type TaskType = 'shared' | 'personal';
+
+export interface AssigneeView {
+  assignment_id: string;
+  user_id: string;
+  name: string;
+  avatar_class: string;
+  initials: string;
+  progress_status: ProgressStatus;
+  assignment_status: AssignmentStatus;
+  eligibility_status: EligibilityStatus;
+  is_complete: boolean;
+  is_eligible_active: boolean;
+  completed_at: string | null;
+}
+
+export interface AttachmentView {
+  id: string;
+  name: string;
+  attachment_type: AttachmentType;
+  attachment_type_label: string;
+  attachment_status: AttachmentStatus;
+  current_revision_no: number;
+  uploaded_by_name: string;
+  uploaded_at: string;
+  updated_at_label: string;
+  is_withdrawn: boolean;
+}
+
+export interface RequirementView {
+  attachment_id: string;
+  attachment_name: string;
+  required_revision_no: number;
+  accessed_revision_no: number | null;
+  accessed_at: string | null;
+  access_method: AccessMethod | null;
+  confirmed_revision_no: number | null;
+  confirmed_at: string | null;
+  requirement_status: RequirementStatus;
+  can_confirm: boolean;
+}
+
+export interface SubmissionView {
+  id: string;
+  assignment_id: string;
+  submission_type: SubmissionType;
+  submission_no: number;
+  body: string;
+  submission_status: SubmissionStatus;
+  submitted_by_name: string;
+  submitted_at: string;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  review_comment: string | null;
+}
+
+export interface AssigneeDetailView extends AssigneeView {
+  submissions: SubmissionView[];
+  requirements: RequirementView[];
+}
+
+export interface HistoryView {
+  id: string;
+  event_type: string;
+  label: string;
+  user_name: string;
+  created_at: string;
+  time_label: string;
+  reason: string | null;
+  icon_color: string;
+}
+
+export interface TaskView {
+  id: string;
+  project_id: string;
+  project_name: string;
+  purpose: TaskPurpose;
+  title: string;
+  body: string;
+  status: TaskStatus;
+  due_at: string | null;
+  due_label: string;
+  created_by: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+  badge: DisplayBadge | null;
+  board_column: BoardColumn;
+  progress_percent: number;
+  total_assignees: number;
+  completed_assignees: number;
+  assignees: AssigneeView[];
+  is_creator: boolean;
+  is_assignee: boolean;
+  is_eligible_assignee: boolean;
+  is_successor: boolean;
+  is_related: boolean;
+  close_type: CloseType | null;
+  close_reason: string | null;
+  closed_by_name: string | null;
+  closed_at: string | null;
+  task_type: TaskType;
+  my_progress_label: string | null;
+
+  // アーカイブ一覧向けの付加情報
+  ai_analysis_output_generated_at?: string | null;
+  ai_summary?: string | null;
+  admin_comment?: string | null;
+  is_favorited?: boolean;}
+
+export type BoardColumn = 'draft' | 'in_progress' | 'confirm_answer' | 'accept_return' | 'closed';
+export type PersonalBoardColumn = 'draft' | 'open' | 'overdue';
+
+export interface ChatMessageView {
+  id: string;
+  user_id: string;
+  author: string;
+  avatar_class: string;
+  initials: string;
+  text: string;
+  attachment_filename: string | null;
+  created_at: string;
+  time_label: string;
+  mine: boolean;
+}
+
+export interface NoteView {
+  id: string;
+  text: string;
+  color: string;
+  attachment_filename: string | null;
+  visibility: NoteVisibility;
+  created_at: string;
+  updated_at: string;
+  author_name: string;
+  mine: boolean;
+  is_favorited: boolean;
+}
+
+export interface TodoView {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface TaskDetailView {
+  task: TaskView;
+  chats: ChatMessageView[];
+  chat_attachment_promotions: ChatAttachmentPromotionView[];
+  shared_notes: NoteView[];
+  personal_notes: NoteView[];
+  todos: TodoView[];
+  attachments: AttachmentView[];
+  my_requirements: RequirementView[];
+  my_assignments: AssigneeDetailView[];
+  all_assignees: AssigneeDetailView[];
+  history: HistoryView[];
+  publish_errors: string[];
+  can_publish: boolean;
+  can_force_close: boolean;
+  can_archive: boolean;
+  my_assignment: AssigneeDetailView | null;
+  can_save_template: boolean;
+  completion_review?: TaskCompletionReviewView | null;
+  can_manage_completion_review?: boolean;}
+
+export interface ProjectView {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface UserView {
+  id: string;
+  name: string;
+  avatar_class: string;
+  initials: string;
+}
+
+export interface ActivityView {
+  id: string;
+  label: string;
+  event_type: string;
+  task_title: string;
+  user_name: string;
+  time_label: string;
+  icon_color: string;
+}
+
+export interface NoteListView {
+  id: string;
+  text: string;
+  color: string;
+  visibility: NoteVisibility;
+  task_id: string;
+  task_title: string;
+  created_at: string;
+  time_label: string;
+  is_favorited: boolean;
+}
+
+// Personal task view types
+export interface PersonalTaskAttachmentView {
+  id: string;
+  display_name: string;
+  created_at: string;
+}
+
+export interface PersonalTaskView {
+  id: string;
+  owner_user_id: string;
+  title: string;
+  body: string;
+  related_project_id: string | null;
+  related_project_name: string | null;
+  related_project_accessible: boolean;
+  due_at: string | null;
+  due_label: string;
+  status: PersonalTaskStatus;
+  status_label: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  archived_at: string | null;
+  attachments: PersonalTaskAttachmentView[];
+  is_overdue: boolean;
+  board_column: PersonalBoardColumn;
+  task_type: TaskType;
+}
+
+export interface PersonalTaskDetailView {
+  task: PersonalTaskView;
+  can_start: boolean;
+  can_complete: boolean;
+  can_delete: boolean;
+  can_edit_title: boolean;
+  can_edit_body: boolean;
+  can_edit_due: boolean;
+  can_edit_project: boolean;
+  can_add_attachment: boolean;
+  can_delete_attachment: boolean;
+  start_errors: string[];
+}
+
+// Template view types
+export interface TemplateAttachmentView {
+  id: string;
+  display_name: string;
+  attachment_type: AttachmentType;
+  attachment_type_label: string;
+  sort_order: number;
+}
+
+export interface TemplateView {
+  id: string;
+  name: string;
+  purpose: TaskPurpose;
+  title_template: string;
+  body_template: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+  updated_at_label: string;
+  attachments: TemplateAttachmentView[];
+  is_favorited: boolean;
+  source_task_id: string | null;
+}
+
+// Filter and pagination types
+export type MyTasksFilter = 'all' | 'my_progress' | 'managing' | 'closed';
+export type TaskTypeFilter = 'all' | 'shared' | 'personal';
+export type SharedConditionFilter = 'all' | 'overdue' | 'confirm_answer' | 'accept_pending' | 'returned' | 'in_progress';
+export type PersonalConditionFilter = 'all' | 'draft' | 'open' | 'overdue' | 'archived';
+export type PageView = 'guide' | 'my_tasks' | 'shared' | 'personal' | 'notes' | 'archive';
+
+export interface PaginationState {
+  page: number;
+  pageSize: number;
+}
+
+export interface SharedSummaryCounts {
+  draft: number;
+  open: number;
+  overdue: number;
+  closed: number;
+  total: number;
+}
+
+export interface PersonalSummaryCounts {
+  draft: number;
+  open: number;
+  overdue: number;
+  total: number;
+}
+
+export interface MyTasksSummaryCounts {
+  all: number;
+  my_progress: number;
+  managing: number;
+  overdue: number;
+  closed: number;
+}
+
+export type ChatAttachmentPromotionStatus = 'pending' | 'approved';
+
+export interface ChatAttachmentPromotion {
+  id: string;
+  task_id: string;
+  chat_message_id: string;
+  attachment_filename: string;
+  requested_by_user_id: string;
+  requested_at: string;
+  status: ChatAttachmentPromotionStatus;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  created_attachment_id: string | null;
+}
+
+export interface ChatAttachmentPromotionView {
+  id: string;
+  task_id: string;
+  chat_message_id: string;
+  attachment_filename: string;
+  requested_by_user_id: string;
+  requested_by_name: string;
+  requested_at: string;
+  requested_at_label: string;
+  status: ChatAttachmentPromotionStatus;
+  approved_by_user_id: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  created_attachment_id: string | null;
+}
+
+// ==========================================================
+// Completed / archived shared task review metadata
+// ==========================================================
+
+export interface TaskCompletionReview {
+  id: string;
+  task_id: string;
+  ai_analysis_output_generated_at: string | null;
+  ai_summary: string | null;
+  admin_comment: string | null;
+  updated_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskCompletionReviewView {
+  task_id: string;
+  ai_analysis_output_generated_at: string | null;
+  ai_summary: string | null;
+  admin_comment: string | null;
+  updated_by_user_id: string | null;
+  updated_by_name: string | null;
+  updated_at: string;
+  updated_at_label: string;
+}
+
+export interface TaskFavorite {
+  id: string;
+  task_id: string;
+  user_id: string;
+  created_at: string;
+}

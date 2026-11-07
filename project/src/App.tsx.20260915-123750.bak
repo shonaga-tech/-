@@ -1,0 +1,3184 @@
+import { useMemo, useState } from 'react';
+import {
+  Archive, Bell, BookOpen, Calendar, Check, ChevronDown, ChevronLeft, CircleHelp,
+  ClipboardCheck, FileText, Filter, Inbox, LayoutDashboard, LayoutGrid, List as ListIcon,
+  ListChecks, MessageSquare, MoreHorizontal, Plus, Search, Send,
+  Settings, ShieldCheck, Sparkles, Star, StickyNote,
+  Trash2, Users, X, AlertTriangle, Eye, Download, FileCheck, Ban,
+  UserX, Lock, History, ChevronRight, Bookmark,
+} from 'lucide-react';
+import { useTaskNavi } from '@/hooks/useTaskNavi';
+import {
+  BOARD_COLUMN_META, BOARD_COLUMN_ORDER, BOARD_COLUMN_LIMITS,
+  PERSONAL_BOARD_COLUMN_META, PERSONAL_BOARD_COLUMN_ORDER, PERSONAL_BOARD_LIMIT,
+  NOTE_COLORS, STATUS_LABELS, PERSONAL_STATUS_LABELS,
+  CLOSE_TYPE_LABELS, ATTACHMENT_TYPE_LABELS, REQUIREMENT_STATUS_LABELS,
+  SUBMISSION_STATUS_LABELS, progressLabel, EVENT_LABELS,
+  NAV_ITEMS, MY_TASKS_FILTERS, TASK_TYPE_FILTERS, SHARED_CONDITION_FILTERS,
+  PERSONAL_CONDITION_FILTERS, PURPOSE_FILTERS, PAGE_SIZE_OPTIONS,
+  SEARCH_PLACEHOLDER, BADGE_LABELS, TASK_TYPE_LABELS,
+  PERSONAL_PROJECT_NO_SELECTION, PERSONAL_PROJECT_INACCESSIBLE,
+  PERSONAL_DELETE_TITLE, PERSONAL_DELETE_MESSAGE,
+  PERSONAL_START_TITLE, PERSONAL_START_MESSAGE,
+  PERSONAL_COMPLETE_TITLE, PERSONAL_COMPLETE_MESSAGE,
+  GUIDE_SHARED_TITLE, GUIDE_SHARED_DESC,
+  GUIDE_PERSONAL_TITLE, GUIDE_PERSONAL_DESC,
+  PROGRESS_LABELS_BY_PURPOSE,
+  GUIDE_SHARED_ACTION, GUIDE_PERSONAL_ACTION,
+  SHARED_SUMMARY_CARDS, PERSONAL_SUMMARY_CARDS, MY_TASKS_SUMMARY_CARDS,
+  MY_TASKS_OVERLAP_HELPER,
+  NOTE_EDITOR_SHARED_HEADING, NOTE_EDITOR_PERSONAL_HEADING,
+  NOTE_EDITOR_SHARED_SCOPE, NOTE_EDITOR_PERSONAL_SCOPE,
+  NOTE_EDITOR_NEW_SHARED, NOTE_EDITOR_NEW_PERSONAL,
+  NOTE_EDITOR_BODY_LABEL, NOTE_EDITOR_ATTACHMENT_LABEL,
+  NOTE_EDITOR_SAVE, NOTE_EDITOR_CANCEL, NOTE_EDITOR_DELETE,
+  NOTE_EDITOR_DELETE_CONFIRM, NOTE_EDITOR_DIRTY_CONFIRM,
+  NOTE_FAVORITE_HELPER, NOTE_FAVORITE_ADD, NOTE_FAVORITE_REMOVE,
+  NOTE_ADD_BUTTON,
+  SHARED_DRAFT_DOC_REQUIRED,
+  PERSONAL_START_MISSING_TITLE, PERSONAL_START_MISSING_DUE, PERSONAL_DUE_READONLY,
+  EMPTY_LIST_MESSAGE, RELATED_DOCS_HEADING, CONFIRM_DOCS_HEADING, REFERENCE_DOCS_HEADING,
+  PERSONAL_EDITOR_TITLE, PERSONAL_EDITOR_NEW_TITLE,
+  PERSONAL_EDITOR_FIELD_TITLE, PERSONAL_EDITOR_FIELD_BODY,
+  PERSONAL_EDITOR_FIELD_DUE, PERSONAL_EDITOR_FIELD_PROJECT,
+  PERSONAL_EDITOR_FIELD_ATTACHMENTS,
+  PERSONAL_EDITOR_SAVE_DRAFT, PERSONAL_EDITOR_START, PERSONAL_EDITOR_UPDATE,
+  PERSONAL_EDITOR_CANCEL,
+  SHARED_EDITOR_TITLE, SHARED_EDITOR_NEW_TITLE,
+  SHARED_EDITOR_FIELD_PURPOSE, SHARED_EDITOR_FIELD_TITLE, SHARED_EDITOR_FIELD_BODY,
+  SHARED_EDITOR_FIELD_DUE, SHARED_EDITOR_FIELD_ASSIGNEES, SHARED_EDITOR_FIELD_SUCCESSOR,
+  SHARED_EDITOR_FIELD_DOCS,
+  SHARED_EDITOR_SAVE_DRAFT, SHARED_EDITOR_PUBLISH, SHARED_EDITOR_CANCEL,
+} from '@/domain/taskNaviConstants';
+import { computeSharedSummaryCounts, computePersonalSummaryCounts, computeMyTasksSummaryCounts } from '@/services/taskNaviSelectors';
+import type {
+  BoardColumn, DisplayBadge, NoteListView, TaskPurpose, TaskStatus,
+  AttachmentType, AssigneeDetailView, RequirementView, SubmissionView,
+  HistoryView, CloseType, TaskView, PersonalTaskView, PersonalTaskDetailView,
+  TemplateView, PersonalBoardColumn, PageView, MyTasksFilter, TaskTypeFilter,
+  SharedConditionFilter, PersonalConditionFilter, UserView,
+} from '@/domain/taskNaviTypes';
+
+type DockPanel = 'chat' | 'shared_note' | 'personal_note' | 'todo';
+
+const PURPOSE_OPTIONS: TaskPurpose[] = ['作業依頼', '確認・判断依頼', '周知・意見聴取', '回答・申込受付'];
+
+const SHARED_PRESET_FILTERS: { key: 'all' | 'my_progress' | 'managing'; label: string }[] = [
+  { key: 'all', label: 'すべて' },
+  { key: 'my_progress', label: '自分の対応' },
+  { key: 'managing', label: '管理中' },
+];
+
+const PURPOSE_BADGE_CLASS: Record<TaskPurpose, string> = {
+  '作業依頼': 'purpose-work',
+  '確認・判断依頼': 'purpose-confirm',
+  '周知・意見聴取': 'purpose-notice',
+  '回答・申込受付': 'purpose-answer',
+};
+
+function isTaskOverdue(task: TaskView): boolean {
+  if (task.status !== 'open') return false;
+  if (!task.due_at) return false;
+  return new Date(task.due_at).getTime() < Date.now();
+}
+
+function formatDueAbsolute(dueAt: string | null): string {
+  if (!dueAt) return '期限なし';
+  const d = new Date(dueAt);
+  if (isNaN(d.getTime())) return '期限なし';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `期限：${yyyy}/${mm}/${dd} ${hh}:${mi}`;
+}
+
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ──────────────────────────────────────────────
+// Main App
+// ──────────────────────────────────────────────
+
+function executionButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    opacity: disabled ? 0.5 : 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  };
+}
+
+function App() {
+  const nav = useTaskNavi();
+
+  // Local UI state
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [dockPanel, setDockPanel] = useState<DockPanel>('chat');
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearch, setChatSearch] = useState('');
+  const [attachmentName, setAttachmentName] = useState('');
+  const [chatInput, setChatInput] = useState('');
+  const [noteInput, setNoteInput] = useState('');
+  const [noteColor, setNoteColor] = useState<string>(NOTE_COLORS[0]);
+  const [noteAttachmentName, setNoteAttachmentName] = useState('');
+  const [noteVisibility, setNoteVisibility] = useState<'shared' | 'personal'>('shared');
+  const [todoInput, setTodoInput] = useState('');
+
+  // Modal state
+  const [showCreate, setShowCreate] = useState(false);
+  const [showCreatePersonal, setShowCreatePersonal] = useState(false);
+  const [showForceClose, setShowForceClose] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
+  const [showExempt, setShowExempt] = useState<AssigneeDetailView | null>(null);
+  const [showReturn, setShowReturn] = useState<SubmissionView | null>(null);
+  const [showRevise, setShowRevise] = useState<string | null>(null);
+  const [showWithdraw, setShowWithdraw] = useState<string | null>(null);
+  const [showSubmitResponse, setShowSubmitResponse] = useState<AssigneeDetailView | null>(null);
+  const [showSubmitReport, setShowSubmitReport] = useState<AssigneeDetailView | null>(null);
+  const [showAddAttachment, setShowAddAttachment] = useState(false);
+  const [showTemplateList, setShowTemplateList] = useState(false);
+  const [showCreateTemplate, setShowCreateTemplate] = useState(false);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [showPersonalDelete, setShowPersonalDelete] = useState(false);
+  const [showPersonalStart, setShowPersonalStart] = useState(false);
+  const [showPersonalComplete, setShowPersonalComplete] = useState(false);
+  const [personalAttachmentName, setPersonalAttachmentName] = useState('');
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  const [showDetailMenu, setShowDetailMenu] = useState(false);
+  const [showLinkChatAttachment, setShowLinkChatAttachment] = useState(false);
+
+  const isSharedDetailMode = nav.selectedTaskId !== null && nav.detail !== null;
+  const isPersonalDetailMode = nav.selectedPersonalTaskId !== null && nav.personalDetail !== null;
+  const isDetailMode = isSharedDetailMode || isPersonalDetailMode;
+
+  // ── Navigation handlers ──
+
+  function handleNavClick(view: PageView) {
+    nav.closeTask();
+    nav.navigateTo(view);
+  }
+
+  function handleProjectClick(projectId: string) {
+    nav.closeTask();
+    nav.setCurrentProjectId(projectId);
+    nav.navigateTo('shared');
+  }
+
+  // ── Chat / Note / Todo handlers ──
+
+  function sendChat() {
+    const text = chatInput.trim();
+    if (!text) return;
+    void nav.sendChat(text, attachmentName || null);
+    setChatInput('');
+    setAttachmentName('');
+  }
+
+  function attachFile(file: File | undefined) { if (file) setAttachmentName(file.name); }
+  function attachNoteFile(file: File | undefined) { if (file) setNoteAttachmentName(file.name); }
+
+  function addNote() {
+    const text = noteInput.trim();
+    if (!text) return;
+    void nav.addNote(noteVisibility, noteColor, text, noteAttachmentName || null);
+    setNoteInput('');
+    setNoteAttachmentName('');
+  }
+
+  function addTodo() {
+    const text = todoInput.trim();
+    if (!text) return;
+    void nav.addTodo(text);
+    setTodoInput('');
+  }
+
+  // ── Loading / Error ──
+
+  if (nav.loading) {
+    return (
+      <div className="app-shell" style={{ display: 'grid', placeItems: 'center', height: '100vh' }}>
+        <p style={{ color: '#83909d', fontSize: 14 }}>読み込み中...</p>
+      </div>
+    );
+  }
+
+  if (nav.error) {
+    return (
+      <div className="app-shell" style={{ display: 'grid', placeItems: 'center', height: '100vh', padding: 40 }}>
+        <div style={{ maxWidth: 480, textAlign: 'center' }}>
+          <AlertTriangle size={48} color="#c2756a" style={{ margin: '0 auto 16px' }} />
+          <h2 style={{ color: '#c2756a', fontSize: 18, marginBottom: 8 }}>データの読み込みに失敗しました</h2>
+          <p style={{ color: '#83909d', fontSize: 13, lineHeight: 1.6 }}>{nav.error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const detail = nav.detail;
+  const personalDetail = nav.personalDetail;
+
+  const taskChats = detail?.chats ?? [];
+  const taskSharedNotes = detail?.shared_notes ?? [];
+  const taskPersonalNotes = detail?.personal_notes ?? [];
+  const taskTodos = detail?.todos ?? [];
+
+  const navLabel = NAV_ITEMS.find((n) => n.key === nav.pageView)?.label ?? '';
+
+  return (
+    <div className="app-shell">
+      {/* ── Sidebar ── */}
+      <aside className={`sidebar ${showSidebar ? 'sidebar-visible' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark"><ClipboardCheck size={19} /></div>
+          <span>TASK-NAVI</span>
+          <span className="beta">β</span>
+        </div>
+        <div className="workspace-switcher" onClick={() => setShowProjectDropdown(!showProjectDropdown)}>
+          <div className="workspace-icon">N</div>
+          <div><small>ワークスペース</small><strong>{nav.currentProject?.name ?? '---'}</strong></div>
+          <ChevronDown size={15} className={showProjectDropdown ? 'chevron-up' : ''} />
+          {showProjectDropdown && (
+            <div className="project-dropdown" onClick={(e) => e.stopPropagation()}>
+              {nav.projects.map((p) => (
+                <button
+                  key={p.id}
+                  className={`project-dropdown-item ${nav.currentProjectId === p.id ? 'selected' : ''}`}
+                  onClick={() => { handleProjectClick(p.id); setShowProjectDropdown(false); }}
+                >
+                  <span className={`project-dot ${p.color}`} />{p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <nav className="primary-nav">
+          <p className="nav-label">ワークスペース</p>
+          {NAV_ITEMS.map((item) => {
+            const icon = navIconFor(item.key);
+            const count = navCountFor(nav, item.key);
+            return (
+              <NavButton
+                key={item.key}
+                icon={icon}
+                label={item.label}
+                count={count}
+                active={nav.pageView === item.key}
+                onClick={() => handleNavClick(item.key)}
+              />
+            );
+          })}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="dev-user-switcher">
+            <small className="dev-label">検証ユーザー</small>
+            <select value={nav.currentUserId} onChange={(e) => nav.setCurrentUserId(e.target.value)}>
+              {nav.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <button className="reset-btn" onClick={() => nav.setShowResetConfirm(true)}>
+            <Archive size={13} />検証データを初期状態に戻す
+          </button>
+          <NavButton icon={<Settings size={17} />} label="設定" active={false} onClick={() => {}} />
+          <div className="sidebar-utilities">
+            <button className="icon-btn" aria-label="ヘルプ" title="ヘルプ"><CircleHelp size={16} /></button>
+            <button className="icon-btn notification" aria-label="通知" title="通知"><Bell size={16} /><i /></button>
+          </div>
+          <div className="user-row">
+            <div className={`avatar ${nav.currentUser?.avatar_class ?? 'avatar-navy'}`}>{nav.currentUser?.initials ?? '??'}</div>
+            <div>
+              <strong>{nav.currentUser?.name ?? '---'}</strong>
+              <small>{nav.currentUser ? (nav.allTasks.some((t) => t.is_creator) ? '作成者' : 'メンバー') : ''}</small>
+            </div>
+            <MoreHorizontal size={17} />
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Main content ── */}
+      <main className="main-content">
+        <div className="page-content">
+          {/* ── Page heading ── */}
+          {!isDetailMode && (
+            <section className="page-heading">
+              <div>
+                {nav.pageView === 'shared' && <div className="eyebrow"><span className="live-dot" />{nav.currentProject?.name ?? '---'}</div>}
+                <h1>{navLabel}</h1>
+                <p>{pageDescription(nav.pageView)}</p>
+              </div>
+              {nav.pageView === 'shared' && (
+                <button className="primary-button" onClick={() => setShowCreate(true)}><Plus size={15} />共有タスクを作成</button>
+              )}
+              {nav.pageView === 'personal' && (
+                <button className="primary-button" onClick={() => setShowCreatePersonal(true)}><Plus size={15} />個人タスクを作成</button>
+              )}
+            </section>
+          )}
+
+          {/* ── Main content area ── */}
+          {isSharedDetailMode && detail ? (
+            <SharedTaskDetail
+              detail={detail}
+              nav={nav}
+              chatOpen={chatOpen}
+              setChatOpen={setChatOpen}
+              dockPanel={dockPanel}
+              setDockPanel={setDockPanel}
+              chatSearchOpen={chatSearchOpen}
+              setChatSearchOpen={setChatSearchOpen}
+              chatSearch={chatSearch}
+              setChatSearch={setChatSearch}
+              chatInput={chatInput}
+              setChatInput={setChatInput}
+              attachmentName={attachmentName}
+              setAttachmentName={setAttachmentName}
+              attachFile={attachFile}
+              sendChat={sendChat}
+              noteInput={noteInput}
+              setNoteInput={setNoteInput}
+              noteColor={noteColor}
+              setNoteColor={setNoteColor}
+              noteAttachmentName={noteAttachmentName}
+              setNoteAttachmentName={setNoteAttachmentName}
+              attachNoteFile={attachNoteFile}
+              addNote={addNote}
+              todoInput={todoInput}
+              setTodoInput={setTodoInput}
+              addTodo={addTodo}
+              taskChats={taskChats}
+              taskSharedNotes={taskSharedNotes}
+              taskPersonalNotes={taskPersonalNotes}
+              taskTodos={taskTodos}
+              modals={{
+                setShowForceClose, setShowArchive, setShowExempt, setShowReturn,
+                setShowRevise, setShowWithdraw, setShowSubmitResponse, setShowSubmitReport,
+                setShowAddAttachment, setShowSaveTemplate, setShowTemplateList,
+                setShowLinkChatAttachment,
+              }}
+              showDetailMenu={showDetailMenu}
+              setShowDetailMenu={setShowDetailMenu}
+            />
+          ) : isPersonalDetailMode && personalDetail ? (
+            <PersonalTaskDetailView
+              detail={personalDetail}
+              nav={nav}
+              onBack={nav.closeTask}
+              showDelete={showPersonalDelete}
+              setShowDelete={setShowPersonalDelete}
+              showStart={showPersonalStart}
+              setShowStart={setShowPersonalStart}
+              showComplete={showPersonalComplete}
+              setShowComplete={setShowPersonalComplete}
+              personalAttachmentName={personalAttachmentName}
+              setPersonalAttachmentName={setPersonalAttachmentName}
+            />
+          ) : nav.pageView === 'guide' ? (
+            <GuidePage
+  nav={nav}
+  onCreateShared={() => setShowCreate(true)}
+  onCreatePersonal={() => setShowCreatePersonal(true)}
+  onCreateTemplate={() => setShowCreateTemplate(true)}
+  onDeleteTemplate={(templateId) => void nav.deleteTemplate(templateId)}
+/>
+          ) : nav.pageView === 'my_tasks' ? (
+            <MyTasksPage nav={nav} />
+          ) : nav.pageView === 'shared' ? (
+            <SharedTasksPage nav={nav} onCreate={() => setShowCreate(true)} />
+          ) : nav.pageView === 'personal' ? (
+            <PersonalTasksPage nav={nav} onCreate={() => setShowCreatePersonal(true)} />
+          ) : nav.pageView === 'notes' ? (
+            <NoteListViewSection
+              noteList={nav.noteList}
+              onOpenTask={(taskId) => void nav.openTask(taskId)}
+              onUnfavorite={(noteId) => void nav.toggleNoteFavorite(noteId)}
+            />
+          ) : nav.pageView === 'archive' ? (
+            <ArchivePage nav={nav} />
+          ) : null}
+        </div>
+      </main>
+
+      {/* ── Modals ── */}
+      {showCreate && (
+        <CreateModal
+  nav={nav}
+  onClose={() => setShowCreate(false)}
+  projectMembers={nav.projectMembers}
+  projectName={nav.currentProject?.name ?? '---'}
+/>
+      )}
+      {showCreatePersonal && (
+        <CreatePersonalModal
+          nav={nav}
+          onClose={() => setShowCreatePersonal(false)}
+        />
+      )}
+      {showForceClose && detail && (
+        <ForceCloseModal
+          onClose={() => setShowForceClose(false)}
+          onConfirm={(reason) => { void nav.forceCloseTask(detail.task.id, reason); setShowForceClose(false); }}
+        />
+      )}
+      {showArchive && detail && (
+        <ConfirmModal
+          title="アーカイブ"
+          message="このタスクをアーカイブします。通常一覧から除外され、アーカイブ一覧で参照できます。"
+          confirmLabel="アーカイブする"
+          onClose={() => setShowArchive(false)}
+          onConfirm={() => { void nav.archiveTask(detail.task.id); setShowArchive(false); }}
+        />
+      )}
+      {showExempt && detail && (
+        <ExemptModal
+          assignee={showExempt}
+          onClose={() => setShowExempt(null)}
+          onExempt={(reason) => { void nav.exemptAssignee(showExempt.assignment_id, reason); setShowExempt(null); }}
+          onOutOfScope={(reason) => { void nav.outOfScopeAssignee(showExempt.assignment_id, reason); setShowExempt(null); }}
+        />
+      )}
+      {showReturn && (
+        <ReturnModal
+          submission={showReturn}
+          onClose={() => setShowReturn(null)}
+          onConfirm={(reason) => { void nav.returnWorkReport(showReturn.id, reason); setShowReturn(null); }}
+        />
+      )}
+      {showRevise && (
+        <ReasonModal
+          title="資料の改訂"
+          label="改訂理由"
+          confirmLabel="改訂する"
+          onClose={() => setShowRevise(null)}
+          onConfirm={(reason) => { void nav.reviseAtt(showRevise, reason); setShowRevise(null); }}
+        />
+      )}
+      {showWithdraw && (
+        <ReasonModal
+          title="資料の撤回"
+          label="撤回理由"
+          confirmLabel="撤回する"
+          onClose={() => setShowWithdraw(null)}
+          onConfirm={(reason) => { void nav.withdrawAtt(showWithdraw, reason); setShowWithdraw(null); }}
+        />
+      )}
+      {showSubmitResponse && (
+        <SubmitModal
+          title="回答を提出"
+          label="回答内容"
+          confirmLabel="回答を提出する"
+          onClose={() => setShowSubmitResponse(null)}
+          onConfirm={(body) => { void nav.submitResponse(showSubmitResponse.assignment_id, body); setShowSubmitResponse(null); }}
+        />
+      )}
+      {showSubmitReport && (
+        <SubmitModal
+          title="作業報告を提出"
+          label="報告内容"
+          confirmLabel="作業報告を提出する"
+          onClose={() => setShowSubmitReport(null)}
+          onConfirm={(body) => { void nav.submitWorkReport(showSubmitReport.assignment_id, body); setShowSubmitReport(null); }}
+        />
+      )}
+      {showAddAttachment && (
+        <AddAttachmentModal
+          onClose={() => setShowAddAttachment(false)}
+          onAdd={(name, type) => { void nav.addAttachment(name, type); setShowAddAttachment(false); }}
+        />
+      )}
+      {showLinkChatAttachment && detail && (
+        <LinkChatAttachmentModal
+          chats={detail.chats}
+          onClose={() => setShowLinkChatAttachment(false)}
+          onLink={(name) => { void nav.addAttachment(name, 'reference'); setShowLinkChatAttachment(false); }}
+        />
+      )}
+      {showCreateTemplate && (
+        <CreateTemplateModal
+          onClose={() => setShowCreateTemplate(false)}
+          onCreate={async (data) => {
+            try {
+              await nav.createTemplate(data);
+              setShowCreateTemplate(false);
+            } catch (error) {
+              console.error('テンプレート作成に失敗しました。', error);
+
+              const message = error instanceof Error
+                ? error.message
+                : 'テンプレートの作成に失敗しました。';
+
+              window.alert(message);
+            }
+          }}
+        />
+      )}
+      {showTemplateList && (
+        <TemplateListModal
+          nav={nav}
+          onClose={() => setShowTemplateList(false)}
+        />
+      )}
+      {showSaveTemplate && detail && (
+        <SaveTemplateModal
+          onClose={() => setShowSaveTemplate(false)}
+          onSave={(name) => { void nav.saveTemplate(detail.task.id, name); setShowSaveTemplate(false); }}
+        />
+      )}
+      {showPersonalDelete && personalDetail && (
+        <ConfirmModal
+          title={PERSONAL_DELETE_TITLE}
+          message={PERSONAL_DELETE_MESSAGE}
+          confirmLabel="削除する"
+          onClose={() => setShowPersonalDelete(false)}
+          onConfirm={() => { void nav.deletePersonalTask(personalDetail.task.id); setShowPersonalDelete(false); }}
+        />
+      )}
+      {showPersonalStart && personalDetail && (
+        <ConfirmModal
+          title={PERSONAL_START_TITLE}
+          message={PERSONAL_START_MESSAGE}
+          confirmLabel="開始する"
+          onClose={() => setShowPersonalStart(false)}
+          onConfirm={() => { void nav.startPersonalTask(personalDetail.task.id); setShowPersonalStart(false); }}
+        />
+      )}
+      {showPersonalComplete && personalDetail && (
+        <ConfirmModal
+          title={PERSONAL_COMPLETE_TITLE}
+          message={PERSONAL_COMPLETE_MESSAGE}
+          confirmLabel="完了してアーカイブ"
+          onClose={() => setShowPersonalComplete(false)}
+          onConfirm={() => { void nav.completePersonalTask(personalDetail.task.id); setShowPersonalComplete(false); }}
+        />
+      )}
+
+      {/* ── Reset confirm ── */}
+      {nav.showResetConfirm && (
+        <div className="modal-backdrop" onMouseDown={() => nav.setShowResetConfirm(false)}>
+          <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div><span className="eyebrow">確認</span><h2>検証データを初期状態に戻します</h2></div>
+              <button className="icon-btn" onClick={() => nav.setShowResetConfirm(false)}><X size={19} /></button>
+            </div>
+            <p style={{ color: '#83909d', fontSize: 12, lineHeight: 1.6, marginBottom: 20 }}>
+              すべてのローカルデータが削除され、初期シードが再投入されます。この操作は取り消せません。よろしいですか？
+            </p>
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => nav.setShowResetConfirm(false)}>キャンセル</button>
+              <button className="primary-button" onClick={() => void nav.handleReset()} style={{ background: '#c2756a' }}>リセットする</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Toast ── */}
+      {nav.toast && <div className="toast"><Check size={16} />{nav.toast}</div>}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Helper functions
+// ──────────────────────────────────────────────
+
+function navIconFor(key: PageView): React.ReactNode {
+  switch (key) {
+    case 'guide': return <LayoutDashboard size={17} />;
+    case 'my_tasks': return <Inbox size={17} />;
+    case 'shared': return <Users size={17} />;
+    case 'personal': return <ListChecks size={17} />;
+    case 'notes': return <BookOpen size={17} />;
+    case 'archive': return <Archive size={17} />;
+  }
+}
+
+function navCountFor(nav: ReturnType<typeof useTaskNavi>, key: PageView): string | undefined {
+  switch (key) {
+    case 'my_tasks': return String(nav.allTasks.length);
+    case 'shared': return String(nav.projectTasks.length);
+    case 'archive': return String(nav.archivedTasks.length);
+    case 'notes': return String(nav.noteList.length);
+    default: return undefined;
+  }
+}
+
+function pageDescription(view: PageView): string {
+  switch (view) {
+    case 'guide': return '共有タスクと個人タスクの使い分けをご確認ください。';
+    case 'my_tasks': return 'あなたが対象者・作成者・後継者として関係するタスクをプロジェクト横断で表示します。';
+    case 'shared': return 'このプロジェクトであなたが関係者として参加している共有タスクです。';
+    case 'personal': return 'プロジェクトに共有されない、あなた専用のタスクです。';
+    case 'notes': return 'あなたの個人ノートとお気に入りの共有ノートをタスク横断で表示します。';
+    case 'archive': return 'アーカイブされたタスクを表示します。';
+  }
+}
+
+// ── Badge rendering: show derived condition badge, not redundant 公開中 ──
+function badgeForTask(task: TaskView): { badge: DisplayBadge | null; label: string } {
+  if (task.badge && task.badge !== 'in_progress') {
+    return { badge: task.badge, label: BADGE_LABELS[task.badge] };
+  }
+  // Derive from board column
+  const meta = BOARD_COLUMN_META[task.board_column];
+  if (task.status === 'open') {
+    return { badge: null, label: meta.label };
+  }
+  return { badge: null, label: STATUS_LABELS[task.status] };
+}
+
+// ── My progress label for current user on shared task ──
+function myProgressLabel(task: TaskView): string | null {
+  return task.my_progress_label;
+}
+
+// ──────────────────────────────────────────────
+// Shared Sub-components
+// ──────────────────────────────────────────────
+
+function NavButton({ icon, label, count, active, onClick }: {
+  icon: React.ReactNode; label: string; count?: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button className={`nav-button ${active ? 'nav-active' : ''}`} onClick={onClick}>
+      {icon}<span>{label}</span>{count && <small>{count}</small>}
+    </button>
+  );
+}
+
+function SummaryCard({ label, value, hint, tone, icon, onClick }: {
+  label: string; value: string; hint: string; tone: string; icon: React.ReactNode; onClick?: () => void;
+}) {
+  return (
+    <div className={`summary-card ${onClick ? 'summary-card-clickable' : ''}`} onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>
+      <div className={`summary-icon ${tone}`}>{icon}</div>
+      <div className="summary-copy">
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small className={tone === 'amber' ? 'warn-text' : ''}>{hint}</small>
+      </div>
+    </div>
+  );
+}
+
+const SHARED_LEGEND_ITEMS = [
+  { className: 'draft', label: '下書き' },
+  { className: 'in_progress', label: '公開中' },
+  { className: 'overdue', label: '期限超過' },
+  { className: 'confirm_answer', label: '回答確認中' },
+  { className: 'accept_return', label: '受領判断中' },
+  { className: 'closed', label: '完了' },
+];
+
+const PERSONAL_LEGEND_ITEMS = [
+  { className: 'draft', label: '下書き' },
+  { className: 'in_progress', label: '対応中' },
+  { className: 'overdue', label: '期限超過' },
+  { className: 'closed', label: 'アーカイブ' },
+];
+
+const MY_TASKS_LEGEND_ITEMS = [
+  { className: 'draft', label: '下書き' },
+  { className: 'in_progress', label: '対応中' },
+  { className: 'overdue', label: '期限超過' },
+  { className: 'closed', label: '完了' },
+];
+
+function StatusLegend({ type }: { type: 'shared' | 'personal' | 'my_tasks' }) {
+  const items = type === 'shared' ? SHARED_LEGEND_ITEMS : type === 'personal' ? PERSONAL_LEGEND_ITEMS : MY_TASKS_LEGEND_ITEMS;
+  return (
+    <div className="status-legend">
+      {items.map((item) => (
+        <div key={item.className} className="legend-item">
+          <span className={`legend-dot legend-${item.className}`} />
+          <span className="legend-label">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActivityRow({ label, title, user, time, color }: {
+  label: string; title: string; user: string; time: string; color: string;
+}) {
+  return (
+    <div className="activity-row">
+      <div className={`activity-icon ${color}`}><Check size={15} /></div>
+      <div><strong>{title}</strong><p>{user}が{label}</p></div>
+      <time>{time}</time>
+    </div>
+  );
+}
+
+function HistoryRow({ item }: { item: HistoryView }) {
+  return (
+    <div className="history-row">
+      <div className={`activity-icon ${item.icon_color}`}><Check size={13} /></div>
+      <div>
+        <strong>{item.label}</strong>
+        {item.reason && <p>理由：{item.reason}</p>}
+        {item.user_name && <p>{item.user_name}</p>}
+      </div>
+      <time>{item.time_label}</time>
+    </div>
+  );
+}
+
+// ── Shared Task Row (list view) ──
+function SharedTaskRow({ task, onClick }: { task: TaskView; onClick: () => void }) {
+  const meta = BOARD_COLUMN_META[task.board_column];
+  const badgeInfo = badgeForTask(task);
+  const overdue = isTaskOverdue(task);
+  const visibleAssignees = task.assignees.filter((a) => a.is_eligible_active).slice(0, 5);
+  const extraCount = task.assignees.filter((a) => a.is_eligible_active).length - 5;
+  return (
+    <button className={`task-row ${task.status === 'closed' ? 'task-status-closed' : ''}`} onClick={onClick}>
+      <div className="task-badges">
+        <span className={`status-badge-lg ${meta.className}`}>{meta.label}</span>
+        <span className={`purpose-badge-lg ${PURPOSE_BADGE_CLASS[task.purpose]}`}>{task.purpose}</span>
+        {badgeInfo.badge && <span className={`badge-lg ${badgeInfo.badge}`}>{badgeInfo.label}</span>}
+        {task.close_type === 'forced' && <span className="badge-lg badge-forced">強制終了</span>}
+      </div>
+      <div className="task-main">
+        <div className="task-title-line">
+          <strong>{task.title || '（件名未設定）'}</strong>
+        </div>
+        <div className="task-subline">
+          <span className="task-creator-label">作成者：<strong>{task.created_by_name}</strong></span>
+        </div>
+      </div>
+      <div className="task-progress">
+        <div className="task-row-avatars">
+          {visibleAssignees.map((a) => (
+            <div key={a.assignment_id} className={`avatar ${a.avatar_class}`} title={a.name}>{a.initials}</div>
+          ))}
+          {extraCount > 0 && <div className="task-row-avatar-more">+{extraCount}</div>}
+        </div>
+        <span className="progress-count-lg">{task.completed_assignees}/{task.total_assignees}人</span>
+        <div className="progress-bar"><span style={{ width: `${task.progress_percent}%` }} /></div>
+      </div>
+      <div className="task-due">
+        <span className={overdue ? 'due-overdue' : ''}>{formatDueAbsolute(task.due_at)}</span>
+      </div>
+      <ChevronDown size={16} className="row-chevron" />
+    </button>
+  );
+}
+
+// ── Personal Task Row (list view) ──
+function PersonalTaskRow({ task, onClick }: { task: PersonalTaskView; onClick: () => void }) {
+  const meta = PERSONAL_BOARD_COLUMN_META[task.board_column];
+  const overdue = task.is_overdue && task.status === 'open';
+  return (
+    <button className={`task-row ${task.status === 'archived' ? 'task-status-closed' : ''}`} onClick={onClick}>
+      <div className="task-badges">
+        <span className={`status-badge-lg ${meta.className}`}>{meta.label}</span>
+        <span className="purpose-badge-lg purpose-personal">個人</span>
+        {overdue && <span className="badge-lg badge-overdue">期限超過</span>}
+      </div>
+      <div className="task-main">
+        <div className="task-title-line">
+          <strong>{task.title || '（件名未設定）'}</strong>
+        </div>
+        <div className="task-subline">
+          <span className="task-creator-label">{task.related_project_name ?? PERSONAL_PROJECT_NO_SELECTION}</span>
+        </div>
+      </div>
+      <div className="task-progress">
+        <span className="progress-count-lg">{task.status === 'archived' ? '完了' : '—'}</span>
+      </div>
+      <div className="task-due">
+        <span className={overdue ? 'due-overdue' : ''}>{formatDueAbsolute(task.due_at)}</span>
+      </div>
+      <ChevronDown size={15} className="row-chevron" />
+    </button>
+  );
+}
+
+// ── Incomplete Assignee Popover ──
+function IncompletePopover({ task, onClose }: { task: TaskView; onClose: () => void }) {
+  const incomplete = task.assignees.filter((a) => !a.is_complete && a.is_eligible_active);
+  return (
+    <div className="incomplete-popover" onClick={(e) => e.stopPropagation()}>
+      <div className="incomplete-popover-header">
+        <span>未完了の対象者</span>
+        <button onClick={onClose}><X size={13} /></button>
+      </div>
+      <div className="incomplete-popover-list">
+        {incomplete.length === 0 ? (
+          <span className="incomplete-empty">全員完了済みです</span>
+        ) : incomplete.map((a) => (
+          <div key={a.assignment_id} className="incomplete-popover-item">
+            <div className={`avatar avatar-xs ${a.avatar_class}`}>{a.initials}</div>
+            <span>{a.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Shared Kanban Card ──
+function SharedKanbanCard({ task, onClick, onProgressClick }: { task: TaskView; onClick: () => void; onProgressClick?: () => void }) {
+  const badgeInfo = badgeForTask(task);
+  const overdue = isTaskOverdue(task);
+  const dueText = formatDueAbsolute(task.due_at);
+  const incompleteAssignees = task.assignees.filter((a) => !a.is_complete && a.is_eligible_active);
+  const canClickProgress = task.is_creator && incompleteAssignees.length > 0;
+  return (
+    <div className="kanban-card" onClick={onClick}>
+      <div className="kanban-card-row1">
+        <span className={`purpose-badge-lg ${PURPOSE_BADGE_CLASS[task.purpose]}`}>{task.purpose}</span>
+        {badgeInfo.badge && <span className={`badge-lg ${badgeInfo.badge}`}>{badgeInfo.label}</span>}
+        {task.close_type === 'forced' && <span className="badge-lg badge-forced">強制終了</span>}
+      </div>
+      <strong className="kanban-card-title">{task.title || '（件名未設定）'}</strong>
+      <div className="kanban-card-creator">作成者：{task.created_by_name}</div>
+      <div className={`kanban-card-due ${overdue ? 'overdue' : ''}`}><Calendar size={13} />{dueText}</div>
+      <div className="kanban-card-progress">
+        <span
+          className={canClickProgress ? 'progress-count clickable' : 'progress-count'}
+          onClick={canClickProgress ? (e) => { e.stopPropagation(); onProgressClick?.(); } : undefined}
+        >
+          進捗 {task.completed_assignees}/{task.total_assignees}人
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── Personal Kanban Card ──
+function PersonalKanbanCard({ task, onClick }: { task: PersonalTaskView; onClick: () => void }) {
+  return (
+    <div
+      className={`kanban-card personal-card ${task.is_overdue && task.status === 'open' ? 'overdue' : ''}`}
+      onClick={onClick}
+    >
+      <div className="kanban-card-top">
+        <span className="task-type-label personal">{TASK_TYPE_LABELS.personal}</span>
+        {task.is_overdue && task.status === 'open' && <span className="badge overdue">期限超過</span>}
+      </div>
+      <strong className="kanban-card-title">{task.title || '（件名未設定）'}</strong>
+      <div className="kanban-card-sub">{task.related_project_name ?? PERSONAL_PROJECT_NO_SELECTION}</div>
+      <div className="kanban-card-bottom">
+        <span className="kanban-due">{task.due_label || '期限なし'}</span>
+        {task.attachments.length > 0 && <small><FileText size={10} /> {task.attachments.length}</small>}
+      </div>
+    </div>
+  );
+}
+
+// ── Kanban column with overflow ──
+function KanbanColumn({ label, className, count, children, limit, overflowCount, onOverflow }: {
+  label: string; className: string; count: number; children: React.ReactNode;
+  limit: number; overflowCount: number; onOverflow?: () => void;
+}) {
+  return (
+    <div className={`kanban-column ${className}`}>
+      <div className="kanban-column-header">
+        <span className={`kanban-dot ${className}`} />
+        <strong>{label}</strong>
+        <small className="kanban-count-badge">{count}</small>
+        <MoreHorizontal size={15} className="kanban-column-more" />
+      </div>
+      <div className="kanban-cards">
+        {children}
+        {overflowCount > 0 && (
+          <div className="kanban-overflow">
+            <button onClick={onOverflow}>他 {overflowCount} 件を表示...</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Pagination ──
+function PaginationBar({ total, page, pageSize, onPageChange, onPageSizeChange }: {
+  total: number; page: number; pageSize: number;
+  onPageChange: (p: number) => void; onPageSizeChange: (s: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+
+  const pageNumbers = useMemo(() => {
+    const pages: (number | '...')[] = [];
+    const maxVisible = 7;
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      if (page > 3) pages.push('...');
+      const startPage = Math.max(2, page - 1);
+      const endPage = Math.min(totalPages - 1, page + 1);
+      for (let i = startPage; i <= endPage; i++) pages.push(i);
+      if (page < totalPages - 2) pages.push('...');
+      pages.push(totalPages);
+    }
+    return pages;
+  }, [totalPages, page]);
+
+  return (
+    <div className="pagination-bar">
+      <div className="pagination-summary">{total === 0 ? EMPTY_LIST_MESSAGE : `全 ${total} 件中 ${start}〜${end} 件を表示`}</div>
+      <div className="pagination-controls">
+        <select className="page-size-select" value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))}>
+          {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}件</option>)}
+        </select>
+        <button className="page-btn" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+          <ChevronLeft size={14} />
+        </button>
+        {pageNumbers.map((p, i) =>
+          p === '...' ? <span key={`e${i}`} className="page-ellipsis">…</span> :
+          <button key={p} className={`page-btn ${p === page ? 'active' : ''}`} onClick={() => onPageChange(p)}>{p}</button>
+        )}
+        <button className="page-btn" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Filter preset tabs ──
+function FilterPresets<T extends string>({ items, current, onChange }: {
+  items: { key: T; label: string }[]; current: T; onChange: (v: T) => void;
+}) {
+  return (
+    <div className="filter-presets">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className={`filter-preset ${current === item.key ? 'filter-preset-active' : ''}`}
+          onClick={() => onChange(item.key)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Toolbar (search + filters) ──
+function Toolbar({ children }: { children: React.ReactNode }) {
+  return <div className="toolbar">{children}</div>;
+}
+
+// ── View toggle ──
+function ViewToggle({ viewMode, setViewMode }: { viewMode: 'list' | 'board'; setViewMode: (v: 'list' | 'board') => void }) {
+  return (
+    <div className="view-toggle">
+      <button className={viewMode === 'list' ? 'view-active' : ''} onClick={() => setViewMode('list')}>
+        <ListIcon size={18} /><span>一覧</span>
+      </button>
+      <button className={viewMode === 'board' ? 'view-active' : ''} onClick={() => setViewMode('board')}>
+        <LayoutGrid size={18} /><span>看板</span>
+      </button>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Guide Page
+// ──────────────────────────────────────────────
+
+function GuidePage({ nav, onCreateShared, onCreatePersonal, onCreateTemplate, onDeleteTemplate }: {
+  nav: ReturnType<typeof useTaskNavi>;
+  onCreateShared: () => void;
+  onCreatePersonal: () => void;
+  onCreateTemplate: () => void;
+  onDeleteTemplate: (templateId: string) => void;
+}) {
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+
+  const selectedTemplate =
+    nav.templates.find((template) => template.id === selectedTemplateId)
+    ?? nav.templates[0]
+    ?? null;
+
+  function handleDeleteTemplate() {
+    if (!selectedTemplate) return;
+
+    const confirmed = window.confirm(
+      `テンプレート「${selectedTemplate.name}」を削除します。よろしいですか？`,
+    );
+
+    if (!confirmed) return;
+
+    onDeleteTemplate(selectedTemplate.id);
+    setSelectedTemplateId('');
+  }
+
+  return (
+    <>
+      {/* 上段：共有タスク・個人タスクの作成のみ */}
+      <section className="guide-cards">
+        <div className="guide-card">
+          <div className="guide-card-icon shared"><Users size={22} /></div>
+          <h3>{GUIDE_SHARED_TITLE}</h3>
+          <p>{GUIDE_SHARED_DESC}</p>
+          <div className="guide-card-actions">
+            <button className="primary-button" onClick={onCreateShared}>
+              <Plus size={15} />
+              {GUIDE_SHARED_ACTION}
+            </button>
+          </div>
+        </div>
+
+        <div className="guide-card">
+          <div className="guide-card-icon personal"><ListChecks size={22} /></div>
+          <h3>{GUIDE_PERSONAL_TITLE}</h3>
+          <p>{GUIDE_PERSONAL_DESC}</p>
+          <div className="guide-card-actions">
+            <button className="primary-button" onClick={onCreatePersonal}>
+              <Plus size={15} />
+              {GUIDE_PERSONAL_ACTION}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* 下段：テンプレート作成・一覧 */}
+      <section className="panel" style={{ padding: 24 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 16,
+            marginBottom: 18,
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18 }}>テンプレート 作成・一覧</h2>
+            <p className="muted-text" style={{ marginTop: 6 }}>
+              ご自身が作成したテンプレートのみ表示されます。
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onCreateTemplate}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            <Plus size={15} />
+            テンプレートを作成
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1.45fr) minmax(300px, 0.75fr)',
+            gap: 18,
+            minHeight: 330,
+          }}
+        >
+          {/* 左：テンプレート詳細プレビュー */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              border: '1px solid #e1e7eb',
+              borderRadius: 8,
+              background: '#fbfcfc',
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                color: '#607281',
+                fontSize: 12,
+                fontWeight: 600,
+                marginBottom: 18,
+              }}
+            >
+              <Eye size={15} />
+              テンプレートプレビュー
+            </div>
+
+            {selectedTemplate ? (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                  <div>
+                    <span className="detail-label">テンプレート名</span>
+                    <strong style={{ display: 'block', color: '#22384e', marginTop: 5 }}>
+                      {selectedTemplate.name}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span className="detail-label">目的</span>
+                    <strong style={{ display: 'block', color: '#2c455a', marginTop: 5 }}>
+                      {selectedTemplate.purpose}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span className="detail-label">件名</span>
+                    <strong style={{ display: 'block', color: '#2c455a', marginTop: 5 }}>
+                      {selectedTemplate.title_template || '（件名未設定）'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span className="detail-label">本文</span>
+                    <p
+                      style={{
+                        whiteSpace: 'pre-wrap',
+                        color: '#526675',
+                        fontSize: 12,
+                        lineHeight: 1.75,
+                        margin: '5px 0 0',
+                      }}
+                    >
+                      {selectedTemplate.body_template || '（本文未設定）'}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 'auto', paddingTop: 24 }}>
+                  <button
+                    type="button"
+                    className="action-btn danger"
+                    onClick={handleDeleteTemplate}
+                    style={{ width: 'auto', padding: '8px 14px' }}
+                  >
+                    <Trash2 size={14} />
+                    削除
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">テンプレートがありません。</div>
+            )}
+          </div>
+
+          {/* 右：テンプレート一覧 */}
+          <div
+            style={{
+              border: '1px solid #e1e7eb',
+              borderRadius: 8,
+              overflow: 'hidden',
+              background: '#fff',
+            }}
+          >
+            <div
+              style={{
+                padding: '12px 14px',
+                borderBottom: '1px solid #eef1f3',
+                color: '#607281',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              テンプレート一覧
+            </div>
+
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+              {nav.templates.map((template) => {
+                const isSelected = selectedTemplate?.id === template.id;
+
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => setSelectedTemplateId(template.id)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      padding: '13px 14px',
+                      textAlign: 'left',
+                      border: 'none',
+                      borderBottom: '1px solid #eef1f3',
+                      background: isSelected ? '#eef6fa' : '#fff',
+                      color: '#2c455a',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <strong style={{ display: 'block', fontSize: 12 }}>
+                      {template.name}
+                    </strong>
+                    <small
+                      style={{
+                        display: 'block',
+                        marginTop: 4,
+                        color: '#82909b',
+                        fontSize: 10,
+                      }}
+                    >
+                      {template.purpose}
+                    </small>
+                  </button>
+                );
+              })}
+
+              {nav.templates.length === 0 && (
+                <div className="empty-state">テンプレートがありません。</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ──────────────────────────────────────────────
+// My Tasks Page (cross-project)
+// ──────────────────────────────────────────────
+
+function MyTasksPage({ nav }: { nav: ReturnType<typeof useTaskNavi> }) {
+  const filteredTasks = useMemo(() => {
+    let shared: TaskView[] = nav.allTasks;
+    let personal: PersonalTaskView[] = nav.personalTasks;
+
+    // MyTasksFilter presets
+    switch (nav.myTasksFilter) {
+      case 'my_progress':
+        shared = shared.filter((t) => t.is_assignee && t.status === 'open');
+        personal = personal.filter((t) => t.status === 'open');
+        break;
+      case 'managing':
+        shared = shared.filter((t) => t.is_creator && t.status !== 'archived');
+        personal = [];
+        break;
+      case 'closed':
+        shared = shared.filter((t) => t.status === 'closed');
+        personal = personal.filter((t) => t.status !== 'archived');
+        break;
+      default:
+        shared = shared.filter((t) => t.status !== 'archived');
+        personal = personal.filter((t) => t.status !== 'archived');
+    }
+
+    // Task type filter
+    if (nav.taskTypeFilter === 'shared') personal = [];
+    if (nav.taskTypeFilter === 'personal') shared = [];
+
+    // Search
+    const term = nav.searchQuery.toLowerCase();
+    if (term) {
+      shared = shared.filter((t) => `${t.title} ${t.body} ${t.project_name}`.toLowerCase().includes(term));
+      personal = personal.filter((t) => `${t.title} ${t.body} ${t.related_project_name ?? ''}`.toLowerCase().includes(term));
+    }
+
+    return { shared, personal };
+  }, [nav.allTasks, nav.personalTasks, nav.myTasksFilter, nav.taskTypeFilter, nav.searchQuery]);
+
+  const total = filteredTasks.shared.length + filteredTasks.personal.length;
+  const totalPages = Math.max(1, Math.ceil(total / nav.pageSize));
+  const currentPage = Math.min(nav.page, totalPages);
+  const start = total === 0 ? 0 : (currentPage - 1) * nav.pageSize;
+  const end = Math.min(currentPage * nav.pageSize, total);
+
+  const pagedShared = filteredTasks.shared.slice(start, Math.max(start, end));
+  const personalStart = Math.max(0, start - filteredTasks.shared.length);
+  const personalEnd = Math.max(0, end - filteredTasks.shared.length);
+  const pagedPersonal = filteredTasks.personal.slice(personalStart, personalEnd);
+
+  const summary = computeMyTasksSummaryCounts(nav.allTasks);
+
+  return (
+    <>
+      <section className="summary-grid">
+        <SummaryCard label="下書き" value={String(summary.managing)} hint="自分が作成" tone="slate" icon={<FileText size={18} />} onClick={() => { nav.setMyTasksFilter('managing'); nav.setPage(1); }} />
+        <SummaryCard label="自分の対応" value={String(summary.my_progress)} hint="対応が必要" tone="blue" icon={<Inbox size={18} />} onClick={() => { nav.setMyTasksFilter('my_progress'); nav.setPage(1); }} />
+        <SummaryCard label="期限超過" value={String(summary.overdue)} hint="要対応" tone="amber" icon={<ShieldCheck size={18} />} onClick={() => { nav.setMyTasksFilter('all'); nav.setPage(1); }} />
+        <SummaryCard label="完了" value={String(summary.closed)} hint="完了済み" tone="green" icon={<Check size={18} />} onClick={() => { nav.setMyTasksFilter('all'); nav.setPage(1); }} />
+        <SummaryCard label="合計" value={String(summary.all)} hint="アーカイブ除く" tone="slate" icon={<ListIcon size={18} />} onClick={() => { nav.setMyTasksFilter('all'); nav.setPage(1); }} />
+      </section>
+      <FilterPresets items={MY_TASKS_FILTERS} current={nav.myTasksFilter} onChange={(v) => { nav.setMyTasksFilter(v); nav.setPage(1); }} />
+      <section className="work-area">
+        <div className="task-panel panel">
+          <div className="panel-header">
+            <div className="panel-title-group"><h2>タスク一覧</h2><span className="muted-text">全 {total} 件</span></div>
+            <div className="panel-header-inline">
+              <div className="search-box">
+                <Search size={16} />
+                <input value={nav.searchQuery} onChange={(e) => { nav.setSearchQuery(e.target.value); nav.setPage(1); }} placeholder={SEARCH_PLACEHOLDER} />
+              </div>
+              <div className="filter-group">
+                <Filter size={15} />
+                <select value={nav.taskTypeFilter} onChange={(e) => { nav.setTaskTypeFilter(e.target.value as TaskTypeFilter); nav.setPage(1); }}>
+                  {TASK_TYPE_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <ViewToggle viewMode={nav.viewMode} setViewMode={nav.setViewMode} />
+          </div>
+          {nav.viewMode === 'list' && <StatusLegend type="my_tasks" />}
+
+          {nav.viewMode === 'list' ? (
+            <>
+              <div className="task-list">
+                {pagedShared.map((task) => <SharedTaskRow key={task.id} task={task} onClick={() => void nav.openTask(task.id)} />)}
+                {pagedPersonal.map((task) => <PersonalTaskRow key={task.id} task={task} onClick={() => void nav.openPersonalTask(task.id)} />)}
+                {total === 0 && <div className="empty-state">条件に一致するタスクはありません。</div>}
+              </div>
+              <PaginationBar
+                total={total}
+                page={currentPage}
+                pageSize={nav.pageSize}
+                onPageChange={nav.setPage}
+                onPageSizeChange={(s) => { nav.setPageSize(s); nav.setPage(1); }}
+              />
+            </>
+          ) : (
+            <MyTasksBoard nav={nav} shared={filteredTasks.shared} personal={filteredTasks.personal} />
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function MyTasksBoard({ nav, shared, personal }: {
+  nav: ReturnType<typeof useTaskNavi>;
+  shared: TaskView[];
+  personal: PersonalTaskView[];
+}) {
+  return (
+    <div className="kanban-board">
+      {BOARD_COLUMN_ORDER.map((col) => {
+        const limit = BOARD_COLUMN_LIMITS[col];
+        const colShared = shared.filter((t) => t.board_column === col);
+        const colPersonal = col === 'draft' ? personal.filter((t) => t.board_column === 'draft')
+          : col === 'in_progress' ? personal.filter((t) => t.board_column === 'open')
+          : col === 'closed' ? personal.filter((t) => t.board_column === 'overdue' && t.status === 'archived')
+          : [];
+        const allCards = [...colShared, ...colPersonal];
+        const visible = allCards.slice(0, limit);
+        const overflow = allCards.length - limit;
+        const meta = BOARD_COLUMN_META[col];
+        return (
+          <KanbanColumn
+            key={col}
+            label={meta.label}
+            className={meta.className}
+            count={allCards.length}
+            limit={limit}
+            overflowCount={Math.max(0, overflow)}
+            onOverflow={() => { nav.setViewMode('list'); }}
+          >
+            {visible.map((item) =>
+              'task_type' in item && item.task_type === 'personal' ? (
+                <PersonalKanbanCard key={item.id} task={item as PersonalTaskView} onClick={() => void nav.openPersonalTask(item.id)} />
+              ) : (
+                <SharedKanbanCard key={item.id} task={item as TaskView} onClick={() => void nav.openTask(item.id)} />
+              )
+            )}
+            {allCards.length === 0 && <div className="kanban-empty">タスクなし</div>}
+          </KanbanColumn>
+        );
+      })}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Shared Tasks Page (project-scoped)
+// ──────────────────────────────────────────────
+
+function SharedTasksPage({ nav, onCreate }: { nav: ReturnType<typeof useTaskNavi>; onCreate: () => void }) {
+  const [sharedPreset, setSharedPreset] = useState<'all' | 'my_progress' | 'managing'>('all');
+  const [popoverTaskId, setPopoverTaskId] = useState<string | null>(null);
+  const filtered = useMemo(() => {
+    let list = nav.projectTasks.filter((t) => t.status !== 'archived' && t.is_related);
+
+    // Preset filter (自分の対応 / 管理中)
+    if (sharedPreset === 'my_progress') {
+      list = list.filter((t) => t.is_assignee && t.status === 'open');
+    } else if (sharedPreset === 'managing') {
+      list = list.filter((t) => t.is_creator && t.status !== 'archived');
+    }
+
+    // Condition filter
+    switch (nav.sharedConditionFilter) {
+      case 'overdue': list = list.filter((t) => t.badge === 'overdue'); break;
+      case 'confirm_answer': list = list.filter((t) => t.board_column === 'confirm_answer'); break;
+      case 'accept_pending': list = list.filter((t) => t.badge === 'accept_pending' || t.board_column === 'accept_return'); break;
+      case 'returned': list = list.filter((t) => t.badge === 'returned'); break;
+      case 'in_progress': list = list.filter((t) => t.board_column === 'in_progress'); break;
+    }
+
+    // Purpose filter
+    if (nav.purposeFilter !== 'all') {
+      list = list.filter((t) => t.purpose === nav.purposeFilter);
+    }
+
+    // Search
+    const term = nav.searchQuery.toLowerCase();
+    if (term) {
+      list = list.filter((t) => `${t.title} ${t.body} ${t.project_name}`.toLowerCase().includes(term));
+    }
+
+    return list;
+  }, [nav.projectTasks, nav.sharedConditionFilter, nav.purposeFilter, nav.searchQuery, sharedPreset]);
+
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / nav.pageSize));
+  const currentPage = Math.min(nav.page, totalPages);
+  const start = total === 0 ? 0 : (currentPage - 1) * nav.pageSize;
+  const end = Math.min(currentPage * nav.pageSize, total);
+  const paged = filtered.slice(start, end);
+
+  return (
+    <>
+      <section className="summary-grid">
+        {(() => {
+          const counts = computeSharedSummaryCounts(nav.projectTasks);
+          return (
+            <>
+              <SummaryCard label="下書き" value={String(counts.draft)} hint="未公開" tone="slate" icon={<FileText size={18} />} onClick={() => { nav.setSharedConditionFilter('all'); nav.setPage(1); }} />
+              <SummaryCard label="公開中" value={String(counts.open)} hint="期限超過を除く" tone="blue" icon={<Inbox size={18} />} onClick={() => { nav.setSharedConditionFilter('in_progress'); nav.setPage(1); }} />
+              <SummaryCard label="期限超過" value={String(counts.overdue)} hint="要対応" tone="amber" icon={<ShieldCheck size={18} />} onClick={() => { nav.setSharedConditionFilter('overdue'); nav.setPage(1); }} />
+              <SummaryCard label="完了" value={String(counts.closed)} hint="完了済み" tone="green" icon={<Check size={18} />} onClick={() => { nav.setSharedConditionFilter('all'); nav.setPage(1); }} />
+              <SummaryCard label="合計" value={String(counts.total)} hint="アーカイブ除く" tone="slate" icon={<ListIcon size={18} />} onClick={() => { nav.setSharedConditionFilter('all'); nav.setPage(1); }} />
+            </>
+          );
+        })()}
+      </section>
+      <FilterPresets items={SHARED_PRESET_FILTERS} current={sharedPreset} onChange={(v) => { setSharedPreset(v); nav.setPage(1); }} />
+      <section className="work-area">
+        <div className="task-panel panel">
+          <div className="panel-header">
+            <div className="panel-title-group"><h2>共有タスク一覧</h2><span className="muted-text">全 {total} 件</span></div>
+            <div className="panel-header-inline">
+              <div className="search-box">
+                <Search size={16} />
+                <input value={nav.searchQuery} onChange={(e) => { nav.setSearchQuery(e.target.value); nav.setPage(1); }} placeholder={SEARCH_PLACEHOLDER} />
+              </div>
+              <div className="filter-group">
+                <Filter size={15} />
+                <select value={nav.sharedConditionFilter} onChange={(e) => { nav.setSharedConditionFilter(e.target.value as SharedConditionFilter); nav.setPage(1); }}>
+                  {SHARED_CONDITION_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+              </div>
+              <div className="filter-group">
+                <Filter size={15} />
+                <select value={nav.purposeFilter} onChange={(e) => { nav.setPurposeFilter(e.target.value as TaskPurpose | 'all'); nav.setPage(1); }}>
+                  {PURPOSE_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <ViewToggle viewMode={nav.viewMode} setViewMode={nav.setViewMode} />
+          </div>
+
+          {nav.viewMode === 'list' ? (
+            <>
+              <StatusLegend type="shared" />
+              <div className="task-list">
+                {paged.map((task) => <SharedTaskRow key={task.id} task={task} onClick={() => void nav.openTask(task.id)} />)}
+                {total === 0 && <div className="empty-state">{EMPTY_LIST_MESSAGE}</div>}
+              </div>
+              <PaginationBar
+                total={total}
+                page={currentPage}
+                pageSize={nav.pageSize}
+                onPageChange={nav.setPage}
+                onPageSizeChange={(s) => { nav.setPageSize(s); nav.setPage(1); }}
+              />
+            </>
+          ) : (
+            <SharedBoard nav={nav} tasks={filtered} popoverTaskId={popoverTaskId} setPopoverTaskId={setPopoverTaskId} />
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function SharedBoard({ nav, tasks, popoverTaskId, setPopoverTaskId }: {
+  nav: ReturnType<typeof useTaskNavi>; tasks: TaskView[];
+  popoverTaskId: string | null; setPopoverTaskId: (id: string | null) => void;
+}) {
+  return (
+    <div className="kanban-board">
+      {BOARD_COLUMN_ORDER.map((col) => {
+        const limit = BOARD_COLUMN_LIMITS[col];
+        const colTasks = tasks.filter((t) => t.board_column === col);
+        const visible = colTasks.slice(0, limit);
+        const overflow = colTasks.length - limit;
+        const meta = BOARD_COLUMN_META[col];
+        return (
+          <KanbanColumn
+            key={col}
+            label={meta.label}
+            className={meta.className}
+            count={colTasks.length}
+            limit={limit}
+            overflowCount={Math.max(0, overflow)}
+            onOverflow={() => { nav.setViewMode('list'); }}
+          >
+            {visible.map((task) => (
+              <div key={task.id} className="kanban-card-wrapper">
+                {popoverTaskId === task.id && (
+                  <IncompletePopover task={task} onClose={() => setPopoverTaskId(null)} />
+                )}
+                <SharedKanbanCard
+                  task={task}
+                  onClick={() => void nav.openTask(task.id)}
+                  onProgressClick={() => setPopoverTaskId(popoverTaskId === task.id ? null : task.id)}
+                />
+              </div>
+            ))}
+            {colTasks.length === 0 && <div className="kanban-empty">タスクなし</div>}
+          </KanbanColumn>
+        );
+      })}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Personal Tasks Page
+// ──────────────────────────────────────────────
+
+function PersonalTasksPage({ nav, onCreate }: { nav: ReturnType<typeof useTaskNavi>; onCreate: () => void }) {
+  const filtered = useMemo(() => {
+    let list = nav.personalTasks;
+
+    switch (nav.personalConditionFilter) {
+      case 'draft': list = list.filter((t) => t.status === 'draft'); break;
+      case 'open': list = list.filter((t) => t.status === 'open'); break;
+      case 'overdue': list = list.filter((t) => t.is_overdue && t.status === 'open'); break;
+      case 'archived': list = list.filter((t) => t.status === 'archived'); break;
+      default: list = list.filter((t) => t.status !== 'archived');
+    }
+
+    const term = nav.searchQuery.toLowerCase();
+    if (term) {
+      list = list.filter((t) => `${t.title} ${t.body} ${t.related_project_name ?? ''}`.toLowerCase().includes(term));
+    }
+
+    return list;
+  }, [nav.personalTasks, nav.personalConditionFilter, nav.searchQuery]);
+
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / nav.pageSize));
+  const currentPage = Math.min(nav.page, totalPages);
+  const start = total === 0 ? 0 : (currentPage - 1) * nav.pageSize;
+  const end = Math.min(currentPage * nav.pageSize, total);
+  const paged = filtered.slice(start, end);
+
+  const summary = computePersonalSummaryCounts(nav.personalTasks);
+
+  return (
+    <>
+      <section className="summary-grid summary-grid-4">
+        <SummaryCard label="下書き" value={String(summary.draft)} hint="未開始" tone="slate" icon={<FileText size={18} />} onClick={() => { nav.setPersonalConditionFilter('draft'); nav.setPage(1); }} />
+        <SummaryCard label="対応中" value={String(summary.open)} hint="進行中" tone="blue" icon={<Inbox size={18} />} onClick={() => { nav.setPersonalConditionFilter('open'); nav.setPage(1); }} />
+        <SummaryCard label="期限超過" value={String(summary.overdue)} hint="要対応" tone="amber" icon={<ShieldCheck size={18} />} onClick={() => { nav.setPersonalConditionFilter('overdue'); nav.setPage(1); }} />
+        <SummaryCard label="合計" value={String(summary.total)} hint="アーカイブ除く" tone="slate" icon={<ListIcon size={18} />} onClick={() => { nav.setPersonalConditionFilter('all'); nav.setPage(1); }} />
+      </section>
+      <section className="work-area">
+      <div className="task-panel panel">
+        <div className="panel-header">
+          <div className="panel-title-group"><h2>個人タスク一覧</h2><span className="muted-text">全 {total} 件</span></div>
+          <div className="panel-header-inline">
+            <div className="search-box">
+              <Search size={16} />
+              <input value={nav.searchQuery} onChange={(e) => { nav.setSearchQuery(e.target.value); nav.setPage(1); }} placeholder={SEARCH_PLACEHOLDER} />
+            </div>
+            <div className="filter-group">
+              <Filter size={15} />
+              <select value={nav.personalConditionFilter} onChange={(e) => { nav.setPersonalConditionFilter(e.target.value as PersonalConditionFilter); nav.setPage(1); }}>
+                {PERSONAL_CONDITION_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <ViewToggle viewMode={nav.viewMode} setViewMode={nav.setViewMode} />
+        </div>
+
+        {nav.viewMode === 'list' ? (
+          <>
+            <StatusLegend type="personal" />
+            <div className="task-list">
+              {paged.map((task) => <PersonalTaskRow key={task.id} task={task} onClick={() => void nav.openPersonalTask(task.id)} />)}
+              {total === 0 && <div className="empty-state">{EMPTY_LIST_MESSAGE}</div>}
+            </div>
+            <PaginationBar
+              total={total}
+              page={currentPage}
+              pageSize={nav.pageSize}
+              onPageChange={nav.setPage}
+              onPageSizeChange={(s) => { nav.setPageSize(s); nav.setPage(1); }}
+            />
+          </>
+        ) : (
+          <PersonalBoard nav={nav} tasks={filtered} />
+        )}
+      </div>
+      </section>
+    </>
+  );
+}
+
+function PersonalBoard({ nav, tasks }: { nav: ReturnType<typeof useTaskNavi>; tasks: PersonalTaskView[] }) {
+  return (
+    <div className="kanban-board">
+      {PERSONAL_BOARD_COLUMN_ORDER.map((col) => {
+        const colTasks = tasks.filter((t) => t.board_column === col);
+        const visible = colTasks.slice(0, PERSONAL_BOARD_LIMIT);
+        const overflow = colTasks.length - PERSONAL_BOARD_LIMIT;
+        const meta = PERSONAL_BOARD_COLUMN_META[col];
+        return (
+          <KanbanColumn
+            key={col}
+            label={meta.label}
+            className={meta.className}
+            count={colTasks.length}
+            limit={PERSONAL_BOARD_LIMIT}
+            overflowCount={Math.max(0, overflow)}
+            onOverflow={() => { nav.setViewMode('list'); }}
+          >
+            {visible.map((task) => <PersonalKanbanCard key={task.id} task={task} onClick={() => void nav.openPersonalTask(task.id)} />)}
+            {colTasks.length === 0 && <div className="kanban-empty">タスクなし</div>}
+          </KanbanColumn>
+        );
+      })}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Archive Page
+// ──────────────────────────────────────────────
+
+function ArchivePage({ nav }: { nav: ReturnType<typeof useTaskNavi> }) {
+  const filtered = useMemo(() => {
+    const term = nav.searchQuery.toLowerCase();
+    const sharedArchived = nav.archivedTasks.filter((t) =>
+      (nav.taskTypeFilter === 'all' || nav.taskTypeFilter === 'shared') &&
+      (!term || `${t.title} ${t.body} ${t.project_name}`.toLowerCase().includes(term))
+    );
+    const personalArchived = nav.personalTasks.filter((t) =>
+      t.status === 'archived' &&
+      (nav.taskTypeFilter === 'all' || nav.taskTypeFilter === 'personal') &&
+      (!term || `${t.title} ${t.body} ${t.related_project_name ?? ''}`.toLowerCase().includes(term))
+    );
+    return { sharedArchived, personalArchived };
+  }, [nav.archivedTasks, nav.personalTasks, nav.taskTypeFilter, nav.searchQuery]);
+
+  const total = filtered.sharedArchived.length + filtered.personalArchived.length;
+  const totalPages = Math.max(1, Math.ceil(total / nav.pageSize));
+  const currentPage = Math.min(nav.page, totalPages);
+  const start = total === 0 ? 0 : (currentPage - 1) * nav.pageSize;
+  const end = Math.min(currentPage * nav.pageSize, total);
+
+  const pagedShared = filtered.sharedArchived.slice(start, Math.max(start, end));
+  const personalStart = Math.max(0, start - filtered.sharedArchived.length);
+  const personalEnd = Math.max(0, end - filtered.sharedArchived.length);
+  const pagedPersonal = filtered.personalArchived.slice(personalStart, personalEnd);
+
+  return (
+    <section className="work-area">
+      <div className="task-panel panel">
+        <div className="panel-header">
+          <div className="panel-title-group"><h2>アーカイブ一覧</h2><span className="muted-text">全 {total} 件</span></div>
+          <div className="panel-header-inline">
+            <div className="search-box">
+              <Search size={16} />
+              <input value={nav.searchQuery} onChange={(e) => { nav.setSearchQuery(e.target.value); nav.setPage(1); }} placeholder={SEARCH_PLACEHOLDER} />
+            </div>
+            <div className="filter-group">
+              <Filter size={15} />
+              <select value={nav.taskTypeFilter} onChange={(e) => { nav.setTaskTypeFilter(e.target.value as TaskTypeFilter); nav.setPage(1); }}>
+                {TASK_TYPE_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="task-list">
+          {pagedShared.map((task) => <SharedTaskRow key={task.id} task={task} onClick={() => void nav.openTask(task.id)} />)}
+          {pagedPersonal.map((task) => <PersonalTaskRow key={task.id} task={task} onClick={() => void nav.openPersonalTask(task.id)} />)}
+          {total === 0 && <div className="empty-state">アーカイブされたタスクはありません。</div>}
+        </div>
+        <PaginationBar
+          total={total}
+          page={currentPage}
+          pageSize={nav.pageSize}
+          onPageChange={nav.setPage}
+          onPageSizeChange={(s) => { nav.setPageSize(s); nav.setPage(1); }}
+        />
+      </div>
+    </section>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Note List View Section
+// ──────────────────────────────────────────────
+
+function NoteListViewSection({ noteList, onOpenTask, onUnfavorite }: {
+  noteList: NoteListView[];
+  onOpenTask: (taskId: string) => void;
+  onUnfavorite: (noteId: string) => void;
+}) {
+  return (
+    <section className="work-area">
+      <div className="task-panel panel">
+        <div className="panel-header">
+          <div><h2>ノート一覧</h2><span className="muted-text">全 {noteList.length} 件</span></div>
+        </div>
+        <div className="note-list-container">
+          {noteList.map((n) => (
+            <div key={n.id} className={`note-list-card ${n.color}`} onClick={() => onOpenTask(n.task_id)}>
+              <div className="note-list-card-top">
+                <span className={`note-list-vis-tag ${n.visibility}`}>{n.visibility === 'shared' ? '共有ノート' : '個人ノート'}</span>
+                {n.visibility === 'shared' && (
+                  <button className="note-list-unfav" onClick={(e) => { e.stopPropagation(); onUnfavorite(n.id); }} title="お気に入り解除">
+                    <Star size={13} />
+                  </button>
+                )}
+              </div>
+              <p className="note-list-text">{n.text}</p>
+              <div className="note-list-meta">
+                <span className="note-list-task-name">{n.task_title}</span>
+                <time>{n.time_label}</time>
+              </div>
+            </div>
+          ))}
+          {noteList.length === 0 && <div className="empty-state">表示できるノートはありません。</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Shared Task Detail
+// ──────────────────────────────────────────────
+
+function SharedTaskDetail({ detail, nav, chatOpen, setChatOpen, dockPanel, setDockPanel, chatSearchOpen, setChatSearchOpen, chatSearch, setChatSearch, chatInput, setChatInput, attachmentName, setAttachmentName, attachFile, sendChat, noteInput, setNoteInput, noteColor, setNoteColor, noteAttachmentName, setNoteAttachmentName, attachNoteFile, addNote, todoInput, setTodoInput, addTodo, taskChats, taskSharedNotes, taskPersonalNotes, taskTodos, modals, showDetailMenu, setShowDetailMenu }: {
+  detail: NonNullable<ReturnType<typeof useTaskNavi>['detail']>;
+  nav: ReturnType<typeof useTaskNavi>;
+  chatOpen: boolean; setChatOpen: (v: boolean) => void;
+  dockPanel: DockPanel; setDockPanel: (v: DockPanel) => void;
+  chatSearchOpen: boolean; setChatSearchOpen: (v: boolean) => void;
+  chatSearch: string; setChatSearch: (v: string) => void;
+  chatInput: string; setChatInput: (v: string) => void;
+  attachmentName: string; setAttachmentName: (v: string) => void;
+  attachFile: (f: File | undefined) => void;
+  sendChat: () => void;
+  noteInput: string; setNoteInput: (v: string) => void;
+  noteColor: string; setNoteColor: (v: string) => void;
+  noteAttachmentName: string; setNoteAttachmentName: (v: string) => void;
+  attachNoteFile: (f: File | undefined) => void;
+  addNote: () => void;
+  todoInput: string; setTodoInput: (v: string) => void;
+  addTodo: () => void;
+  taskChats: typeof detail.chats;
+  taskSharedNotes: typeof detail.shared_notes;
+  taskPersonalNotes: typeof detail.personal_notes;
+  taskTodos: typeof detail.todos;
+  modals: {
+    setShowForceClose: (v: boolean) => void;
+    setShowArchive: (v: boolean) => void;
+    setShowExempt: (v: AssigneeDetailView | null) => void;
+    setShowReturn: (v: SubmissionView | null) => void;
+    setShowRevise: (v: string | null) => void;
+    setShowWithdraw: (v: string | null) => void;
+    setShowSubmitResponse: (v: AssigneeDetailView | null) => void;
+    setShowSubmitReport: (v: AssigneeDetailView | null) => void;
+    setShowAddAttachment: (v: boolean) => void;
+    setShowSaveTemplate: (v: boolean) => void;
+    setShowTemplateList: (v: boolean) => void;
+    setShowLinkChatAttachment: (v: boolean) => void;
+  };
+  showDetailMenu: boolean;
+  setShowDetailMenu: (v: boolean) => void;
+}) {
+  const d = detail;
+  const m = modals;
+
+  return (
+    <section className="detail-mode">
+      <button className="back-button" onClick={nav.closeTask}><ChevronLeft size={16} />一覧に戻る</button>
+      <div className="detail-grid">
+        {/* Left: task detail */}
+        <div className="detail-panel panel">
+          <div className="detail-top">
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="task-type-label shared">{TASK_TYPE_LABELS.shared}</span>
+              <span className={`status-pill ${BOARD_COLUMN_META[d.task.board_column].className}`}>{STATUS_LABELS[d.task.status]}</span>
+              {d.task.close_type && (
+                <span className={`status-pill ${d.task.close_type === 'forced' ? 'status-accept-return' : 'status-closed'}`}>
+                  {CLOSE_TYPE_LABELS[d.task.close_type]}
+                </span>
+              )}
+            </div>
+            <div className="detail-menu-wrapper">
+              <button className="icon-btn" onClick={() => setShowDetailMenu(!showDetailMenu)}><MoreHorizontal size={18} /></button>
+              {showDetailMenu && (
+                <div className="detail-menu" onClick={(e) => e.stopPropagation()}>
+                  {d.task.is_creator && d.task.status === 'open' && (
+                    <button className="detail-menu-item danger-text" onClick={() => { m.setShowForceClose(true); setShowDetailMenu(false); }}>
+                      <Lock size={14} />強制終了する
+                    </button>
+                  )}
+                  {d.can_archive && (
+                    <button className="detail-menu-item" onClick={() => { m.setShowArchive(true); setShowDetailMenu(false); }}>
+                      <Archive size={14} />アーカイブする
+                    </button>
+                  )}
+                  {d.can_save_template && (
+                    <button className="detail-menu-item" onClick={() => { m.setShowSaveTemplate(true); setShowDetailMenu(false); }}>
+                      <Bookmark size={14} />テンプレートとして保存
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <h2>{d.task.title || '（件名未設定）'}</h2>
+          <p className="detail-description">{d.task.body || '（本文未設定）'}</p>
+          <div className="detail-block"><span className="detail-label">目的</span><strong>{d.task.purpose}</strong></div>
+          <div className="detail-block"><span className="detail-label">期限</span><strong className={d.task.badge === 'overdue' ? 'danger-text' : ''}>{d.task.due_label}</strong></div>
+          <div className="detail-block"><span className="detail-label">作成者</span><strong>{d.task.created_by_name}</strong></div>
+          {d.task.is_successor && <div className="detail-block"><span className="detail-label">後継者</span><strong>あなたは後継者です</strong></div>}
+          <div className="detail-block">
+            <span className="detail-label">対象者</span>
+            <div className="people">
+              {d.task.assignees.slice(0, 3).map((a) => <div key={a.user_id} className={`avatar ${a.avatar_class}`}>{a.initials}</div>)}
+              {d.task.assignees.length > 3 && <span>+{d.task.assignees.length - 3}</span>}
+              <span>{d.task.completed_assignees}/{d.task.total_assignees}名が完了</span>
+            </div>
+          </div>
+          <div className="detail-divider" />
+          <div className="detail-section-title"><span>進捗状況</span><strong>{d.task.progress_percent}%</strong></div>
+          <div className="detail-progress"><span style={{ width: `${d.task.progress_percent}%` }} /></div>
+
+          {/* Close info */}
+          {d.task.status === 'closed' && d.task.close_type === 'forced' && (
+            <div className="detail-close-info">
+              <div className="detail-close-row"><span>終了種別</span><strong>強制終了</strong></div>
+              <div className="detail-close-row"><span>理由</span><strong>{d.task.close_reason ?? ''}</strong></div>
+              <div className="detail-close-row"><span>実行者</span><strong>{d.task.closed_by_name ?? ''}</strong></div>
+            </div>
+          )}
+
+          {/* My requirements */}
+          {d.my_assignment && d.my_assignment.requirements.length > 0 && (
+            <div className="detail-req-list">
+              <p className="ops-label">確認必須資料</p>
+              {d.my_assignment.requirements.map((r) => (
+                <RequirementRow
+                  key={r.attachment_id}
+                  req={r}
+                  onView={() => void nav.accessAtt(d.my_assignment!.assignment_id, r.attachment_id, 'view')}
+                  onDownload={() => void nav.accessAtt(d.my_assignment!.assignment_id, r.attachment_id, 'download')}
+                  onConfirm={() => void nav.confirmDoc(d.my_assignment!.assignment_id, r.attachment_id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Creator publish button (draft only) */}
+          {d.task.is_creator && d.task.status === 'draft' && (
+            <div className="detail-ops">
+              {d.publish_errors.length > 0 && (
+                <div className="publish-errors">
+                  <p className="ops-label">公開するために以下が必要です：</p>
+                  {d.publish_errors.map((e, i) => <div key={i} className="publish-error-item"><AlertTriangle size={12} />{e}</div>)}
+                </div>
+              )}
+              <button className="action-btn primary" disabled={!d.can_publish} onClick={() => void nav.publishTask(d.task.id)}>
+                <Send size={14} />公開する
+              </button>
+            </div>
+          )}
+
+          {/* Attachments section */}
+          <div className="detail-divider" />
+          <div className="detail-section-title"><span><FileText size={14} />関連資料</span><strong>{d.attachments.length}件</strong></div>
+          <div className="attachment-list">
+            {d.attachments.map((att) => (
+              <div key={att.id} className={`attachment-row ${att.is_withdrawn ? 'attachment-withdrawn' : ''}`}>
+                <div className="attachment-info">
+                  <FileText size={15} />
+                  <div>
+                    <strong>{att.name}</strong>
+                    <span className="attachment-meta">
+                      {att.attachment_type_label} ・ 版{att.current_revision_no} ・ {att.uploaded_by_name} ・ {att.updated_at_label}{att.is_withdrawn ? ' ・ 撤回済み' : ''}
+                    </span>
+                  </div>
+                </div>
+                {d.task.is_creator && !att.is_withdrawn && (d.task.status === 'draft' || d.task.status === 'open') && (
+                  <div className="attachment-actions">
+                    <button className="mini-btn" onClick={() => m.setShowRevise(att.id)} title="改訂"><FileCheck size={13} />改訂</button>
+                    <button className="mini-btn danger" onClick={() => m.setShowWithdraw(att.id)} title="撤回"><Ban size={13} />撤回</button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {d.attachments.length === 0 && <div className="note-empty">資料はありません</div>}
+            {d.task.is_creator && (d.task.status === 'draft' || d.task.status === 'open') && (
+              <button className="action-btn secondary" onClick={() => m.setShowAddAttachment(true)}><Plus size={14} />資料を追加</button>
+            )}
+            {d.task.is_creator && (d.task.status === 'draft' || d.task.status === 'open') && taskChats.some((c) => c.attachment_filename) && (
+              <button className="link-chat-attachment-btn" onClick={() => m.setShowLinkChatAttachment(true)}><FileText size={12} />チャット添付から関連資料へ追加</button>
+            )}
+          </div>
+
+          {/* History */}
+          <div className="detail-divider" />
+          <div className="detail-section-title"><span><History size={14} />操作履歴</span></div>
+          <div className="history-list">
+            {d.history.map((h) => <HistoryRow key={h.id} item={h} />)}
+            {d.history.length === 0 && <div className="note-empty">履歴はありません</div>}
+          </div>
+        </div>
+
+        {/* Right: ops panel */}
+        <div className="ops-panel panel">
+          {/* Upper: participant section */}
+          <div className="panel-header">
+            <div><h2>【参加者用】あなたの対応</h2><span className="muted-text">このタスクに対するご自身の進捗報告・確認操作を行います</span></div>
+          </div>
+          <div className="ops-body">
+            {d.my_assignment ? (
+              <>
+                <div className="ops-meta">
+                  <div className="ops-meta-row"><span>あなたの状況</span><strong>{progressLabel(d.task.purpose, d.my_assignment.progress_status)}</strong></div>
+                  {d.my_assignment.eligibility_status !== 'eligible' && (
+                    <div className="ops-meta-row"><span>対象状態</span><strong>{d.my_assignment.eligibility_status === 'exempted' ? '免除' : '対象外'}</strong></div>
+                  )}
+                </div>
+                <div className="ops-divider" />
+                <p className="ops-label">あなたの操作</p>
+                <MyOperationButtons
+                  task={d.task}
+                  myAssignment={d.my_assignment}
+                  onConfirm={() => void nav.confirmTask(d.my_assignment!.assignment_id)}
+                  onSubmitResponse={() => m.setShowSubmitResponse(d.my_assignment!)}
+                  onSubmitReport={() => m.setShowSubmitReport(d.my_assignment!)}
+                />
+              </>
+            ) : (
+              <p className="ops-hint">あなたはこのタスクの対象者ではありません。</p>
+            )}
+          </div>
+
+          {/* Lower: admin section (creator only) */}
+          {d.task.is_creator && (
+            <div className="ops-admin-section">
+              <div className="ops-divider" />
+              <div className="panel-header ops-admin-header">
+                <div><h3>【管理者用】審査・管理</h3><span className="muted-text">対象者の作業報告の承認・差戻し、および免除設定を行います</span></div>
+              </div>
+              <div className="ops-admin-body">
+                {d.task.status === 'draft' && (
+                  <button className="action-btn primary" disabled={!d.can_publish} onClick={() => void nav.publishTask(d.task.id)}>
+                    <Send size={14} />公開する
+                  </button>
+                )}
+                {d.all_assignees.length > 0 && (
+                  <div className="ops-admin-assignees">
+                    {d.all_assignees.map((a) => (
+                      <AssigneeProgressRow
+                        key={a.assignment_id}
+                        assignee={a}
+                        purpose={d.task.purpose}
+                        taskStatus={d.task.status}
+                        isCreator={d.task.is_creator}
+                        onAccept={(subId) => void nav.acceptWorkReport(subId)}
+                        onReturn={(sub) => m.setShowReturn(sub)}
+                        onExempt={() => m.setShowExempt(a)}
+                        onOutOfScope={() => m.setShowExempt(a)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Dock: 4 tabs */}
+      <div className={`chat-dock ${chatOpen ? 'chat-dock-open' : ''}`}>
+        <div className="dock-tabs">
+          <button className={`dock-tab ${chatOpen && dockPanel === 'chat' ? 'dock-tab-active' : ''}`} onClick={() => { setDockPanel('chat'); setChatOpen(true); }}>
+            <MessageSquare size={16} /><span className="chat-dock-tab-label">チャット</span>
+            {taskChats.length > 0 && <small className="chat-dock-tab-count">{taskChats.length}</small>}
+          </button>
+          <button className={`dock-tab ${chatOpen && dockPanel === 'shared_note' ? 'dock-tab-active' : ''}`} onClick={() => { setDockPanel('shared_note'); setChatOpen(true); }}>
+            <StickyNote size={16} /><span className="chat-dock-tab-label">共有ノート</span>
+            {taskSharedNotes.length > 0 && <small className="chat-dock-tab-count">{taskSharedNotes.length}</small>}
+          </button>
+          <button className={`dock-tab ${chatOpen && dockPanel === 'personal_note' ? 'dock-tab-active' : ''}`} onClick={() => { setDockPanel('personal_note'); setChatOpen(true); }}>
+            <BookOpen size={16} /><span className="chat-dock-tab-label">個人ノート</span>
+            {taskPersonalNotes.length > 0 && <small className="chat-dock-tab-count">{taskPersonalNotes.length}</small>}
+          </button>
+          <button className={`dock-tab ${chatOpen && dockPanel === 'todo' ? 'dock-tab-active' : ''}`} onClick={() => { setDockPanel('todo'); setChatOpen(true); }}>
+            <ListChecks size={16} /><span className="chat-dock-tab-label">TODO</span>
+            {taskTodos.length > 0 && <small className="chat-dock-tab-count">{taskTodos.length}</small>}
+          </button>
+        </div>
+        <div className="chat-dock-body panel">
+          {dockPanel === 'chat' ? (
+            <>
+              <div className="chat-header">
+                <div><strong>タスクチャット</strong><span className="muted-text">関係者とのやり取り</span></div>
+                <div className="chat-header-actions">
+                  <button className={`icon-btn ${chatSearchOpen ? 'chat-tool-active' : ''}`} onClick={() => setChatSearchOpen(!chatSearchOpen)} aria-label="検索"><Search size={16} /></button>
+                  <button className="icon-btn" onClick={() => setChatOpen(false)} aria-label="閉じる"><X size={16} /></button>
+                </div>
+              </div>
+              {chatSearchOpen && <div className="chat-search-row"><Search size={14} /><input autoFocus value={chatSearch} onChange={(e) => setChatSearch(e.target.value)} placeholder="メッセージを検索" /></div>}
+              <div className="chat-messages">
+                {taskChats.length === 0 && <div className="chat-empty">まだメッセージはありません。</div>}
+                {taskChats.filter((msg) => !chatSearch || `${msg.author} ${msg.text}`.toLowerCase().includes(chatSearch.toLowerCase())).map((message) => (
+                  <div key={message.id} className={`chat-message ${message.mine ? 'chat-message-mine' : ''}`}>
+                    {!message.mine && <div className={`avatar ${message.avatar_class}`}>{message.initials}</div>}
+                    <div className="chat-bubble">
+                      {!message.mine && <span className="chat-author">{message.author}</span>}
+                      <p>{message.text}</p>
+                      {message.attachment_filename && <div className="chat-attachment-display"><FileText size={11} />{message.attachment_filename}</div>}
+                      <time>{message.time_label}</time>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="chat-input-area">
+                <label className="chat-attach" htmlFor="chat-file-input" aria-label="ファイルを添付"><Plus size={17} /></label>
+                <input id="chat-file-input" className="chat-file-input" type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" onChange={(e) => attachFile(e.target.files?.[0])} />
+                <div className="chat-compose">
+                  {attachmentName && <span className="attachment-chip" title={attachmentName}>{attachmentName}<button type="button" onClick={() => setAttachmentName('')}><X size={11} /></button></span>}
+                  <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendChat()} placeholder="メッセージを入力..." />
+                </div>
+                <button className="chat-send" onClick={sendChat} disabled={!chatInput.trim()}><Send size={15} /></button>
+              </div>
+            </>
+          ) : dockPanel === 'shared_note' ? (
+            <SharedNotePanel
+              notes={taskSharedNotes}
+              noteInput={noteInput} setNoteInput={setNoteInput}
+              noteColor={noteColor} setNoteColor={setNoteColor}
+              noteAttachmentName={noteAttachmentName} setNoteAttachmentName={setNoteAttachmentName}
+              attachNoteFile={attachNoteFile} addNote={addNote}
+              onDelete={(id) => void nav.deleteNote(id)}
+              onToggleFavorite={(id) => void nav.toggleNoteFavorite(id)}
+              onClose={() => setChatOpen(false)}
+            />
+          ) : dockPanel === 'personal_note' ? (
+            <PersonalNotePanel
+              notes={taskPersonalNotes}
+              noteInput={noteInput} setNoteInput={setNoteInput}
+              noteColor={noteColor} setNoteColor={setNoteColor}
+              noteAttachmentName={noteAttachmentName} setNoteAttachmentName={setNoteAttachmentName}
+              attachNoteFile={attachNoteFile} addNote={addNote}
+              onDelete={(id) => void nav.deleteNote(id)}
+              onClose={() => setChatOpen(false)}
+            />
+          ) : (
+            <>
+              <div className="chat-header">
+                <div><strong>個人TODO</strong><span className="muted-text">このタスクの個人TODO</span></div>
+                <button className="icon-btn" onClick={() => setChatOpen(false)} aria-label="閉じる"><X size={16} /></button>
+              </div>
+              <div className="note-scroll">
+                <div className="note-section">
+                  <div className="todo-list">
+                    {taskTodos.map((t) => (
+                      <div key={t.id} className={`todo-item ${t.done ? 'todo-done' : ''}`}>
+                        <button className="todo-check" onClick={() => void nav.toggleTodo(t.id)}>{t.done && <Check size={12} />}</button>
+                        <span>{t.text}</span>
+                        <button className="todo-delete" onClick={() => void nav.deleteTodo(t.id)}><Trash2 size={12} /></button>
+                      </div>
+                    ))}
+                    {taskTodos.length === 0 && <div className="note-empty">TODOがありません</div>}
+                  </div>
+                  <div className="note-add-row">
+                    <input value={todoInput} onChange={(e) => setTodoInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addTodo()} placeholder="TODOを追加..." />
+                    <button className="note-add-btn" onClick={addTodo} disabled={!todoInput.trim()}><Plus size={15} /></button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Personal Task Detail
+// ──────────────────────────────────────────────
+
+function PersonalTaskDetailView({ detail, nav, onBack, showDelete, setShowDelete, showStart, setShowStart, showComplete, setShowComplete, personalAttachmentName, setPersonalAttachmentName }: {
+  detail: PersonalTaskDetailView;
+  nav: ReturnType<typeof useTaskNavi>;
+  onBack: () => void;
+  showDelete: boolean; setShowDelete: (v: boolean) => void;
+  showStart: boolean; setShowStart: (v: boolean) => void;
+  showComplete: boolean; setShowComplete: (v: boolean) => void;
+  personalAttachmentName: string; setPersonalAttachmentName: (v: string) => void;
+}) {
+  const d = detail;
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(d.task.title);
+  const [editingBody, setEditingBody] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState(d.task.body);
+  const [editingDue, setEditingDue] = useState(false);
+  const [dueDraft, setDueDraft] = useState(d.task.due_at ? d.task.due_at.slice(0, 10) : '');
+
+  function saveTitle() {
+    void nav.updatePersonalTask(d.task.id, { title: titleDraft.trim() });
+    setEditingTitle(false);
+  }
+  function saveBody() {
+    void nav.updatePersonalTask(d.task.id, { body: bodyDraft.trim() });
+    setEditingBody(false);
+  }
+  function saveDue() {
+    void nav.updatePersonalTask(d.task.id, { due_at: dueDraft ? new Date(dueDraft).toISOString() : null });
+    setEditingDue(false);
+  }
+  function addAttachment() {
+    const name = personalAttachmentName.trim();
+    if (!name) return;
+    void nav.addPersonalAttachment(d.task.id, name);
+    setPersonalAttachmentName('');
+  }
+
+  const projectLabel = d.task.related_project_name
+    ? (d.task.related_project_accessible ? d.task.related_project_name : PERSONAL_PROJECT_INACCESSIBLE)
+    : PERSONAL_PROJECT_NO_SELECTION;
+
+  return (
+    <section className="detail-mode">
+      <button className="back-button" onClick={onBack}><ChevronLeft size={16} />一覧に戻る</button>
+      <div style={{ maxWidth: 700 }}>
+        <div className="panel personal-detail-panel">
+          <div className="personal-detail-top">
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="task-type-label personal">{TASK_TYPE_LABELS.personal}</span>
+              <span className={`status-pill ${PERSONAL_BOARD_COLUMN_META[d.task.board_column].className}`}>{d.task.status_label}</span>
+              {d.task.is_overdue && d.task.status === 'open' && <span className="badge overdue">期限超過</span>}
+            </div>
+          </div>
+
+          {/* Title */}
+          {editingTitle && d.can_edit_title ? (
+            <div style={{ marginBottom: 10 }}>
+              <input className="personal-project-select" value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} autoFocus />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="action-btn primary" style={{ width: 'auto', padding: '6px 14px' }} onClick={saveTitle}>保存</button>
+                <button className="action-btn secondary" style={{ width: 'auto', padding: '6px 14px', margin: 0 }} onClick={() => { setEditingTitle(false); setTitleDraft(d.task.title); }}>キャンセル</button>
+              </div>
+            </div>
+          ) : (
+            <h2 onClick={() => d.can_edit_title && setEditingTitle(true)} style={{ cursor: d.can_edit_title ? 'pointer' : 'default' }}>
+              {d.task.title || '（件名未設定）'}
+            </h2>
+          )}
+
+          {/* Body */}
+          {editingBody && d.can_edit_body ? (
+            <div style={{ marginBottom: 16 }}>
+              <textarea className="personal-project-select" style={{ minHeight: 80, resize: 'vertical' }} value={bodyDraft} onChange={(e) => setBodyDraft(e.target.value)} autoFocus rows={4} />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="action-btn primary" style={{ width: 'auto', padding: '6px 14px' }} onClick={saveBody}>保存</button>
+                <button className="action-btn secondary" style={{ width: 'auto', padding: '6px 14px', margin: 0 }} onClick={() => { setEditingBody(false); setBodyDraft(d.task.body); }}>キャンセル</button>
+              </div>
+            </div>
+          ) : (
+            <p className="personal-detail-desc" onClick={() => d.can_edit_body && setEditingBody(true)} style={{ cursor: d.can_edit_body ? 'pointer' : 'default' }}>
+              {d.task.body || '（本文未設定）'}
+            </p>
+          )}
+
+          <div className="detail-block"><span className="detail-label">ステータス</span><strong>{d.task.status_label}</strong></div>
+          <div className="detail-block"><span className="detail-label">関連プロジェクト</span><strong>{projectLabel}</strong></div>
+
+          {/* Due date */}
+          <div className="detail-block">
+            <span className="detail-label">期限</span>
+            {editingDue && d.can_edit_due ? (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="date" className="personal-project-select" style={{ width: 'auto' }} value={dueDraft} onChange={(e) => setDueDraft(e.target.value)} />
+                <button className="action-btn primary" style={{ width: 'auto', padding: '4px 10px', fontSize: 10 }} onClick={saveDue}>保存</button>
+                <button className="action-btn secondary" style={{ width: 'auto', padding: '4px 10px', margin: 0, fontSize: 10 }} onClick={() => { setEditingDue(false); }}>キャンセル</button>
+              </div>
+            ) : (
+              <strong
+                className={d.task.is_overdue ? 'danger-text' : ''}
+                onClick={() => d.can_edit_due && setEditingDue(true)}
+                style={{ cursor: d.can_edit_due ? 'pointer' : 'default' }}
+              >
+                {d.task.due_label || '期限なし'}
+              </strong>
+            )}
+          </div>
+
+          {/* Attachments */}
+          <div className="detail-divider" />
+          <div className="detail-section-title"><span><FileText size={14} />添付資料</span><strong>{d.task.attachments.length}件</strong></div>
+          <div className="personal-attachment-list">
+            {d.task.attachments.map((att) => (
+              <div key={att.id} className="attachment-row">
+                <div className="attachment-info">
+                  <FileText size={15} />
+                  <div>
+                    <strong>{att.display_name}</strong>
+                  </div>
+                </div>
+                {d.can_delete_attachment && (
+                  <div className="attachment-actions">
+                    <button className="mini-btn danger" onClick={() => void nav.removePersonalAttachment(att.id)}><Trash2 size={12} />削除</button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {d.task.attachments.length === 0 && <div className="note-empty">資料はありません</div>}
+            {d.can_add_attachment && (
+              <div className="personal-attachment-add">
+                <input
+                  value={personalAttachmentName}
+                  onChange={(e) => setPersonalAttachmentName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addAttachment()}
+                  placeholder="資料名を入力..."
+                />
+                <button className="action-btn primary" style={{ width: 'auto', padding: '8px 14px', margin: 0 }} disabled={!personalAttachmentName.trim()} onClick={addAttachment}>
+                  <Plus size={14} />追加
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div className="detail-divider" />
+          <div className="detail-ops">
+            {d.task.status === 'draft' && (d.can_start || d.start_errors.length > 0) && (
+              <>
+                {d.start_errors.length > 0 && (
+                  <div className="publish-errors">
+                    {d.start_errors.map((e, i) => <div key={i} className="publish-error-item"><AlertTriangle size={12} />{e}</div>)}
+                  </div>
+                )}
+                <button className="action-btn primary" disabled={!d.can_start || d.start_errors.length > 0} onClick={() => setShowStart(true)}><Send size={14} />開始する</button>
+              </>
+            )}
+            {d.task.status === 'open' && d.can_complete && (
+              <button className="action-btn primary" onClick={() => setShowComplete(true)}><Check size={14} />完了してアーカイブ</button>
+            )}
+            {d.can_delete && (
+              <button className="action-btn danger" onClick={() => setShowDelete(true)}><Trash2 size={14} />削除する</button>
+            )}
+          </div>
+
+          {/* Footer info */}
+          <div className="detail-footer">
+            <span><FileText size={11} />作成日：{new Date(d.task.created_at).toLocaleDateString('ja-JP')}</span>
+            {d.task.started_at && <span><Check size={11} />開始日：{new Date(d.task.started_at).toLocaleDateString('ja-JP')}</span>}
+            {d.task.archived_at && <span><Archive size={11} />アーカイブ日：{new Date(d.task.archived_at).toLocaleDateString('ja-JP')}</span>}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Assignee Progress Row
+// ──────────────────────────────────────────────
+
+function AssigneeProgressRow({ assignee, purpose, taskStatus, isCreator, onAccept, onReturn, onExempt, onOutOfScope }: {
+  assignee: AssigneeDetailView;
+  purpose: TaskPurpose;
+  taskStatus: string;
+  isCreator: boolean;
+  onAccept: (subId: string) => void;
+  onReturn: (sub: SubmissionView) => void;
+  onExempt: () => void;
+  onOutOfScope: () => void;
+}) {
+  const latestSub = assignee.submissions[assignee.submissions.length - 1];
+  return (
+    <div className="assignee-progress-row">
+      <div className={`avatar ${assignee.avatar_class}`}>{assignee.initials}</div>
+      <span>{assignee.name}</span>
+      <span className={`progress-pill ${assignee.progress_status}`}>{progressLabel(purpose, assignee.progress_status)}</span>
+      {assignee.eligibility_status !== 'eligible' && (
+        <span className="progress-pill" style={{ color: '#9aa6b0', background: '#eef2f5' }}>
+          {assignee.eligibility_status === 'exempted' ? '免除' : '対象外'}
+        </span>
+      )}
+      {isCreator && taskStatus === 'open' && latestSub && latestSub.submission_status === 'submitted' && latestSub.submission_type === 'work_report' && (
+        <div className="assignee-ops">
+          <button className="mini-btn" onClick={() => onAccept(latestSub.id)}>受領する</button>
+          <button className="mini-btn danger" onClick={() => onReturn(latestSub)}>差戻す</button>
+        </div>
+      )}
+      {isCreator && taskStatus === 'open' && assignee.is_eligible_active && (
+        <div className="assignee-ops">
+          <button className="mini-btn" onClick={onExempt}><UserX size={11} />免除</button>
+          <button className="mini-btn" onClick={onOutOfScope}><UserX size={11} />対象外</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RequirementRow({ req, onView, onDownload, onConfirm }: {
+  req: RequirementView;
+  onView: () => void;
+  onDownload: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="req-row">
+      <div className="req-info">
+        <FileText size={14} />
+        <div>
+          <strong>{req.attachment_name}</strong>
+          <span className="req-meta">
+            必要版：v{req.required_revision_no}{req.accessed_revision_no ? ` ・ 閲覧版：v${req.accessed_revision_no}` : ''} ・ {REQUIREMENT_STATUS_LABELS[req.requirement_status]}
+          </span>
+        </div>
+      </div>
+      {req.requirement_status === 'required' && (
+        <div className="req-actions">
+          <button className="mini-btn" onClick={onView}><Eye size={12} />閲覧</button>
+          <button className="mini-btn" onClick={onDownload}><Download size={12} />DL</button>
+          <button className="mini-btn" disabled={!req.can_confirm} onClick={onConfirm} title={!req.can_confirm ? '資料を閲覧またはダウンロードしてから確認完了にしてください' : ''}>
+            <FileCheck size={12} />確認完了
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyOperationButtons({ task, myAssignment, onConfirm, onSubmitResponse, onSubmitReport }: {
+  task: { purpose: TaskPurpose; status: string };
+  myAssignment: AssigneeDetailView;
+  onConfirm: () => void;
+  onSubmitResponse: () => void;
+  onSubmitReport: () => void;
+}) {
+  const purpose = task.purpose;
+  const progress = myAssignment.progress_status;
+  const hasPendingReqs = myAssignment.requirements.some((r) => r.requirement_status === 'required');
+  const hasRequirements = myAssignment.requirements.length > 0;
+  const showButtons = (purpose === '確認・判断依頼' || purpose === '周知・意見聴取') && progress === 'pending'
+    || purpose === '回答・申込受付' && progress === 'pending'
+    || purpose === '作業依頼' && (progress === 'pending' || progress === 'returned');
+  return (
+    <div className="detail-ops">
+      {hasRequirements && showButtons && (
+        <div className={`ops-doc-condition ${hasPendingReqs ? '' : 'met'}`}>
+          <AlertTriangle size={13} />
+          {hasPendingReqs ? '未確認（完了条件を満たしていません）' : '完了条件を満たしています'}
+        </div>
+      )}
+      {(purpose === '確認・判断依頼' || purpose === '周知・意見聴取') && progress === 'pending' && (
+        <button className={`action-btn primary ${hasPendingReqs ? 'doc-locked' : ''}`} disabled={hasPendingReqs} onClick={onConfirm} title={hasPendingReqs ? '確認必須資料をすべて確認してください' : ''}>
+          <FileCheck size={14} />確認完了にする
+        </button>
+      )}
+      {purpose === '回答・申込受付' && progress === 'pending' && (
+        <button className={`action-btn primary ${hasPendingReqs ? 'doc-locked' : ''}`} disabled={hasPendingReqs} onClick={onSubmitResponse} title={hasPendingReqs ? '確認必須資料をすべて確認してください' : ''}>
+          <Send size={14} />回答を提出する
+        </button>
+      )}
+      {purpose === '作業依頼' && (progress === 'pending' || progress === 'returned') && (
+        <button className={`action-btn primary ${hasPendingReqs ? 'doc-locked' : ''}`} disabled={hasPendingReqs} onClick={onSubmitReport} title={hasPendingReqs ? '確認必須資料をすべて確認してください' : ''}>
+          <Send size={14} />作業報告を提出する
+        </button>
+      )}
+      {progress === 'reported' && purpose === '作業依頼' && <span className="ops-hint">受領待ちです。作成者の受領をお待ちください。</span>}
+      {progress === 'accepted' && <span className="ops-hint">受領済みです。</span>}
+      {progress === 'confirmed' && <span className="ops-hint">確認済みです。</span>}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Note Panels (shared / personal)
+// ──────────────────────────────────────────────
+
+function SharedNotePanel({ notes, noteInput, setNoteInput, noteColor, setNoteColor, noteAttachmentName, setNoteAttachmentName, attachNoteFile, addNote, onDelete, onToggleFavorite, onClose }: {
+  notes: { id: string; text: string; color: string; attachment_filename: string | null; is_favorited: boolean }[];
+  noteInput: string; setNoteInput: (v: string) => void;
+  noteColor: string; setNoteColor: (v: string) => void;
+  noteAttachmentName: string; setNoteAttachmentName: (v: string) => void;
+  attachNoteFile: (f: File | undefined) => void;
+  addNote: () => void;
+  onDelete: (id: string) => void;
+  onToggleFavorite: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="note-panel">
+      <div className="chat-header">
+        <div><strong>共有ノート</strong><span className="muted-text">タスクの関係者に共有されます</span></div>
+        <button className="icon-btn" onClick={onClose} aria-label="閉じる"><X size={16} /></button>
+      </div>
+      <div className="note-scroll">
+        <div className="note-section">
+          <div className="note-section-title"><StickyNote size={14} />共有ノート</div>
+          <div className="note-card-grid">
+            {notes.map((n) => (
+              <div key={n.id} className={`note-card ${n.color}`}>
+                <p>{n.text}</p>
+                {n.attachment_filename && <div className="note-card-attachment"><FileText size={11} />{n.attachment_filename}</div>}
+                <div className="note-card-actions">
+                  <button className={`note-card-fav ${n.is_favorited ? 'note-card-fav-active' : ''}`} onClick={() => onToggleFavorite(n.id)} title={n.is_favorited ? 'お気に入り解除' : 'お気に入り登録'}>
+                    <Star size={12} />
+                  </button>
+                  <button className="note-card-delete" onClick={() => onDelete(n.id)}><Trash2 size={12} /></button>
+                </div>
+              </div>
+            ))}
+            {notes.length === 0 && <div className="note-empty">共有ノートがありません</div>}
+          </div>
+        </div>
+        <div className="note-section">
+          <div className="note-section-title"><Plus size={14} />共有ノートを追加</div>
+          <div className="note-add-row">
+            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addNote()} placeholder="共有ノートを入力..." />
+            <label className="note-attach-btn" htmlFor="note-file-input-shared"><Plus size={14} /></label>
+            <input id="note-file-input-shared" className="chat-file-input" type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" onChange={(e) => attachNoteFile(e.target.files?.[0])} />
+            <div className="note-color-picker">
+              {NOTE_COLORS.map((c) => <button key={c} className={`note-color-dot ${c} ${noteColor === c ? 'note-color-selected' : ''}`} onClick={() => setNoteColor(c)} />)}
+            </div>
+            <button className="note-add-btn" onClick={addNote} disabled={!noteInput.trim()}><Plus size={15} /></button>
+          </div>
+          {noteAttachmentName && <div className="note-attachment-chip"><FileText size={11} />{noteAttachmentName}<button onClick={() => setNoteAttachmentName('')}><X size={11} /></button></div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PersonalNotePanel({ notes, noteInput, setNoteInput, noteColor, setNoteColor, noteAttachmentName, setNoteAttachmentName, attachNoteFile, addNote, onDelete, onClose }: {
+  notes: { id: string; text: string; color: string; attachment_filename: string | null }[];
+  noteInput: string; setNoteInput: (v: string) => void;
+  noteColor: string; setNoteColor: (v: string) => void;
+  noteAttachmentName: string; setNoteAttachmentName: (v: string) => void;
+  attachNoteFile: (f: File | undefined) => void;
+  addNote: () => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="note-panel">
+      <div className="chat-header">
+        <div><strong>個人ノート</strong><span className="muted-text">自分だけに表示されます</span></div>
+        <button className="icon-btn" onClick={onClose} aria-label="閉じる"><X size={16} /></button>
+      </div>
+      <div className="note-scroll">
+        <div className="note-section">
+          <div className="note-section-title"><BookOpen size={14} />個人ノート</div>
+          <div className="note-card-grid">
+            {notes.map((n) => (
+              <div key={n.id} className={`note-card ${n.color}`}>
+                <p>{n.text}</p>
+                {n.attachment_filename && <div className="note-card-attachment"><FileText size={11} />{n.attachment_filename}</div>}
+                <button className="note-card-delete" onClick={() => onDelete(n.id)}><Trash2 size={12} /></button>
+              </div>
+            ))}
+            {notes.length === 0 && <div className="note-empty">個人ノートがありません</div>}
+          </div>
+        </div>
+        <div className="note-section">
+          <div className="note-section-title"><Plus size={14} />個人ノートを追加</div>
+          <div className="note-add-row">
+            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addNote()} placeholder="個人ノートを入力..." />
+            <label className="note-attach-btn" htmlFor="note-file-input-personal"><Plus size={14} /></label>
+            <input id="note-file-input-personal" className="chat-file-input" type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" onChange={(e) => attachNoteFile(e.target.files?.[0])} />
+            <div className="note-color-picker">
+              {NOTE_COLORS.map((c) => <button key={c} className={`note-color-dot ${c} ${noteColor === c ? 'note-color-selected' : ''}`} onClick={() => setNoteColor(c)} />)}
+            </div>
+            <button className="note-add-btn" onClick={addNote} disabled={!noteInput.trim()}><Plus size={15} /></button>
+          </div>
+          {noteAttachmentName && <div className="note-attachment-chip"><FileText size={11} />{noteAttachmentName}<button onClick={() => setNoteAttachmentName('')}><X size={11} /></button></div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Modals
+// ──────────────────────────────────────────────
+
+function CreateModal({ nav, onClose, projectMembers, projectName }: {
+  nav: ReturnType<typeof useTaskNavi>;
+  onClose: () => void;
+  projectMembers: UserView[];
+  projectName: string;
+}) {
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [purpose, setPurpose] = useState<TaskPurpose>('作業依頼');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [dateError, setDateError] = useState('');
+  const today = todayLocalDate();
+
+  // 同じIDのプロジェクトメンバーは1人だけ描画する。
+  const uniqueProjectMembers = useMemo(
+    () => [...new Map(projectMembers.map((member) => [member.id, member])).values()],
+    [projectMembers],
+  );
+
+  const canPublish =
+    title.trim().length > 0
+    && selectedMembers.length > 0
+    && !dateError
+    && (!dueDate || dueDate >= today);
+
+  function toggleMember(id: string) {
+    setSelectedMembers((prev) =>
+      prev.includes(id)
+        ? prev.filter((memberId) => memberId !== id)
+        : [...prev, id],
+    );
+  }
+
+  function handleTemplateChange(templateId: string) {
+    setSelectedTemplateId(templateId);
+
+    if (!templateId) return;
+
+    const template = nav.templates.find((item) => item.id === templateId);
+    if (!template) return;
+
+    // テンプレートを適用してもモーダルは閉じず、
+    // 目的・件名・本文だけを即時上書きする。
+    setPurpose(template.purpose);
+    setTitle(template.title_template ?? '');
+    setBody(template.body_template ?? '');
+  }
+
+  function handleDateChange(value: string) {
+    setDueDate(value);
+    setDateError(value && value < today ? '過去の日付は設定できません' : '');
+  }
+
+  function handleSubmit(publish: boolean) {
+    if (dueDate && dueDate < today) {
+      setDateError('過去の日付は設定できません');
+      return;
+    }
+
+    if (publish && !canPublish) return;
+
+    void nav.createTask({
+      purpose,
+      title: title.trim(),
+      body: body.trim(),
+      due_at: dueDate ? new Date(dueDate).toISOString() : null,
+      assignee_user_ids: selectedMembers,
+      publish,
+      successor_user_id: null,
+    });
+
+    onClose();
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">新しい共有タスク</span>
+            <h2>共有タスクを作成</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </div>
+
+        <div className="create-field-group">
+          <label className="create-field">
+            <span>テンプレートを適用（任意）</span>
+            <select value={selectedTemplateId} onChange={(e) => handleTemplateChange(e.target.value)}>
+              <option value="">テンプレートを選択してください</option>
+              {nav.templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="create-field">
+            <span>対象プロジェクト</span>
+            <div className="project-display">{projectName}</div>
+          </label>
+
+          <label className="create-field">
+            <span>目的</span>
+            <select value={purpose} onChange={(e) => setPurpose(e.target.value as TaskPurpose)}>
+              {PURPOSE_OPTIONS.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </label>
+
+          <label className="create-field">
+            <span>件名</span>
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="例：資料の最終確認をする"
+            />
+          </label>
+
+          <label className="create-field">
+            <span>本文</span>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="タスクの詳細を入力..."
+              rows={3}
+            />
+          </label>
+
+          <label className="create-field">
+            <span>期限</span>
+            <input
+              type="date"
+              min={today}
+              value={dueDate}
+              onChange={(e) => handleDateChange(e.target.value)}
+            />
+          </label>
+
+          {dateError && <span className="date-error">{dateError}</span>}
+
+          <div className="create-field">
+            <span>対象者</span>
+            <div className="member-select-grid">
+              {uniqueProjectMembers.map((member) => (
+                <button
+                  key={member.id}
+                  className={`member-chip ${selectedMembers.includes(member.id) ? 'member-selected' : ''}`}
+                  onClick={() => toggleMember(member.id)}
+                >
+                  <Check size={12} />
+                  {member.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="modal-note">
+          <ShieldCheck size={16} />
+          <span>下書き保存は未入力でも可能です。公開には件名および対象者の指定が必要です。</span>
+        </div>
+
+        <div className="modal-actions">
+          <button
+            className="primary-button"
+            disabled={!canPublish}
+            onClick={() => handleSubmit(true)}
+          >
+            <Send size={15} />
+            公開
+          </button>
+
+          <button
+            className="secondary-button"
+            disabled={false}
+            onClick={() => handleSubmit(false)}
+          >
+            下書き保存
+          </button>
+
+          <button className="secondary-button" onClick={onClose}>
+            キャンセル
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function CreatePersonalModal({ nav, onClose }: {
+  nav: ReturnType<typeof useTaskNavi>;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [relatedProjectId, setRelatedProjectId] = useState<string>('');
+  const [dueDate, setDueDate] = useState('');
+  const today = todayLocalDate();
+
+  const availableProjects = nav.projects.filter((p) => nav.availableProjectIds.has(p.id));
+
+  function handleSubmit() {
+    void nav.createPersonalTask({
+      title: title.trim(),
+      body: body.trim(),
+      related_project_id: relatedProjectId || null,
+      due_at: dueDate ? new Date(dueDate).toISOString() : null,
+    });
+    onClose();
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">新しい個人タスク</span><h2>個人タスクを作成</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <div className="create-field-group">
+          <label className="create-field"><span>件名</span><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：週次レポートの準備" /></label>
+          <label className="create-field"><span>本文</span><textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="タスクの詳細を入力..." rows={3} /></label>
+          <label className="create-field">
+            <span>関連プロジェクト（任意）</span>
+            <select className="personal-project-select" value={relatedProjectId} onChange={(e) => setRelatedProjectId(e.target.value)}>
+              <option value="">{PERSONAL_PROJECT_NO_SELECTION}</option>
+              {availableProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <label className="create-field"><span>期限（任意）</span><input type="date" min={today} value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
+        </div>
+        <div className="modal-note"><ListChecks size={16} /><span>個人タスクはあなた専用のタスクで、プロジェクトには共有されません。下書きとして保存されます。</span></div>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={false} onClick={handleSubmit}><Plus size={15} />下書き保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ForceCloseModal({ onClose, onConfirm }: {
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow" style={{ color: '#c25450' }}>警告</span><h2>強制終了</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <p style={{ color: '#83909d', fontSize: 12, lineHeight: 1.6, marginBottom: 16 }}>未完了の対象者・未確認資料が残っていても終了します。強制終了理由が履歴に残ります。</p>
+        <label className="create-field"><span>強制終了理由（必須）</span><textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由を入力してください..." rows={3} /></label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!reason.trim()} onClick={() => onConfirm(reason.trim())} style={{ background: '#c25450' }}>理由を記録して強制終了</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmModal({ title, message, confirmLabel, onClose, onConfirm }: {
+  title: string; message: string; confirmLabel: string;
+  onClose: () => void; onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">確認</span><h2>{title}</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <p style={{ color: '#83909d', fontSize: 12, lineHeight: 1.6, marginBottom: 20 }}>{message}</p>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExemptModal({ assignee, onClose, onExempt, onOutOfScope }: {
+  assignee: AssigneeDetailView;
+  onClose: () => void;
+  onExempt: (reason: string) => void;
+  onOutOfScope: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">対象者管理</span><h2>{assignee.name}</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <label className="create-field"><span>理由（必須）</span><textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="理由を入力してください..." rows={3} /></label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="secondary-button" disabled={!reason.trim()} onClick={() => onExempt(reason.trim())}>免除</button>
+          <button className="primary-button" disabled={!reason.trim()} onClick={() => onOutOfScope(reason.trim())} style={{ background: '#9a7b3a' }}>対象外にする</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReturnModal({ submission, onClose, onConfirm }: {
+  submission: SubmissionView;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const cannotReturn = !reason.trim();
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">差戻し</span>
+            <h2>作業報告を差戻す</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </div>
+
+        <div style={{ background: '#f7f9fa', borderRadius: 6, padding: 12, marginBottom: 16 }}>
+          <p style={{ fontSize: 11, color: '#3a4e5e', margin: 0 }}>{submission.body}</p>
+        </div>
+
+        <label className="create-field">
+          <span>差戻し理由（必須）</span>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="差戻し理由を入力してください..."
+            rows={3}
+          />
+        </label>
+
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>
+            キャンセル
+          </button>
+
+          <button
+            className="primary-button"
+            disabled={cannotReturn}
+            style={{ background: '#c2756a' }}
+            onClick={() => onConfirm(reason.trim())}
+          >
+            差戻す
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function ReasonModal({ title, label, confirmLabel, onClose, onConfirm }: {
+  title: string; label: string; confirmLabel: string;
+  onClose: () => void; onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">{title}</span><h2>{title}</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <label className="create-field"><span>{label}（必須）</span><textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder={`${label}を入力してください...`} rows={3} /></label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!reason.trim()} onClick={() => onConfirm(reason.trim())}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubmitModal({ title, label, confirmLabel, onClose, onConfirm }: {
+  title: string; label: string; confirmLabel: string;
+  onClose: () => void; onConfirm: (body: string) => void;
+}) {
+  const [body, setBody] = useState('');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">{title}</span><h2>{title}</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <label className="create-field"><span>{label}</span><textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder={`${label}を入力してください...`} rows={4} /></label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!body.trim()} onClick={() => onConfirm(body.trim())}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddAttachmentModal({ onClose, onAdd }: {
+  onClose: () => void;
+  onAdd: (name: string, type: AttachmentType) => void;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<AttachmentType>('reference');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">資料追加</span><h2>資料を追加</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <label className="create-field"><span>資料名</span><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="例：契約書.pdf" /></label>
+        <label className="create-field"><span>資料区分</span>
+          <select value={type} onChange={(e) => setType(e.target.value as AttachmentType)}>
+            <option value="reference">参考資料</option>
+            <option value="confirmation_required">確認必須資料</option>
+          </select>
+        </label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!name.trim()} onClick={() => onAdd(name.trim(), type)}>追加</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinkChatAttachmentModal({ chats, onClose, onLink }: {
+  chats: { id: string; author: string; attachment_filename: string | null; time_label: string }[];
+  onClose: () => void;
+  onLink: (name: string) => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const chatWithFiles = chats.filter((c) => c.attachment_filename);
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">チャット添付から関連資料へ追加</span><h2>チャット添付から関連資料へ追加</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <p className="muted-text" style={{ marginBottom: 10 }}>チャット内で添付されたファイルから関連資料として登録するものを選択してください。</p>
+        <div className="chat-attachment-link-list">
+          {chatWithFiles.length === 0 && <div className="chat-attachment-link-empty">チャット添付ファイルはありません</div>}
+          {chatWithFiles.map((c) => (
+            <div
+              key={c.id}
+              className={`chat-attachment-link-item ${selected === c.id ? 'selected' : ''}`}
+              onClick={() => setSelected(c.id)}
+            >
+              <FileText size={16} className="file-icon" />
+              <div style={{ flex: 1 }}>
+                <strong>{c.attachment_filename}</strong>
+                <small>{c.author} ・ {c.time_label}</small>
+              </div>
+              {selected === c.id && <Check size={16} color="#2e638e" />}
+            </div>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!selected} onClick={() => {
+            const chat = chatWithFiles.find((c) => c.id === selected);
+            if (chat?.attachment_filename) onLink(chat.attachment_filename);
+          }}>関連資料に追加</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Template Modals
+// ──────────────────────────────────────────────
+
+function TemplateListModal({ nav, onClose }: {
+  nav: ReturnType<typeof useTaskNavi>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState('');
+
+  const sorted = useMemo(() => {
+    const filtered = nav.templates.filter((t) =>
+      !search || t.name.toLowerCase().includes(search.toLowerCase())
+    );
+    return [...filtered].sort((a, b) => {
+      if (a.is_favorited !== b.is_favorited) return a.is_favorited ? -1 : 1;
+      return b.updated_at.localeCompare(a.updated_at);
+    });
+  }, [nav.templates, search]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">テンプレート</span><h2>テンプレートから作成</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <div className="template-search-row">
+          <Search size={14} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="テンプレート名で検索..." autoFocus />
+        </div>
+        <div className="template-list">
+          {sorted.map((tpl) => (
+            <div key={tpl.id} className="template-item" onClick={() => { void nav.createTaskFromTemplate(tpl.id); onClose(); }}>
+              <button
+                className="template-item-fav"
+                onClick={(e) => { e.stopPropagation(); void nav.toggleTemplateFavorite(tpl.id); }}
+                title={tpl.is_favorited ? 'お気に入り解除' : 'お気に入り登録'}
+              >
+                <Star size={16} />
+              </button>
+              <div className="template-item-info">
+                <strong>{tpl.name}</strong>
+                <div className="template-item-meta">
+                  <span>{tpl.purpose}</span>
+                  {tpl.title_template && <span>・ {tpl.title_template}</span>}
+                  <span>・ 作成：{tpl.created_by_name}</span>
+                  <span>・ 更新：{tpl.updated_at_label}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+          {sorted.length === 0 && <div className="template-empty">テンプレートがありません</div>}
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateTemplateModal({ onClose, onCreate }: {
+  onClose: () => void;
+  onCreate: (data: {
+    name: string;
+    purpose: TaskPurpose;
+    title: string;
+    body: string;
+  }) => void;
+}) {
+  const [name, setName] = useState('');
+  const [purpose, setPurpose] = useState<TaskPurpose>('作業依頼');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+
+  const cannotCreate = !name.trim();
+
+  function handleCreate() {
+    if (cannotCreate) return;
+
+    onCreate({
+      name: name.trim(),
+      purpose,
+      title,
+      body,
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">新しいテンプレート</span>
+            <h2>テンプレートを作成</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </div>
+
+        <div className="create-field-group">
+          <label className="create-field">
+            <span>テンプレート名（必須）</span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例：定期確認タスク"
+            />
+          </label>
+
+          <label className="create-field">
+            <span>目的</span>
+            <select value={purpose} onChange={(e) => setPurpose(e.target.value as TaskPurpose)}>
+              {PURPOSE_OPTIONS.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="create-field">
+            <span>件名（任意）</span>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="例：資料の最終確認をする"
+            />
+          </label>
+
+          <label className="create-field">
+            <span>本文（任意）</span>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="テンプレートの本文を入力..."
+              rows={4}
+            />
+          </label>
+        </div>
+
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>
+            キャンセル
+          </button>
+
+          <button
+            className="primary-button"
+            disabled={cannotCreate}
+            style={executionButtonStyle(cannotCreate)}
+            onClick={handleCreate}
+          >
+            <Plus size={15} />
+            作成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function SaveTemplateModal({ onClose, onSave }: {
+  onClose: () => void;
+  onSave: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="create-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div><span className="eyebrow">テンプレート保存</span><h2>テンプレートとして保存</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+        <label className="create-field"><span>テンプレート名</span><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="例：定期確認タスク" /></label>
+        <div className="modal-note"><Bookmark size={16} /><span>タスクの目的・件名・本文・資料をテンプレートとして保存します。</span></div>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>キャンセル</button>
+          <button className="primary-button" disabled={!name.trim()} onClick={() => onSave(name.trim())}><Bookmark size={14} />保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
